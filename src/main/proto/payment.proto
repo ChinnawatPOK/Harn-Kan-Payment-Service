@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package harnkan.payment;
+
+option java_package = "com.harnkan.contract.payment";
+option java_multiple_files = true;
+option java_outer_classname = "PaymentProto";
+
+service PaymentService {
+  rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
+  rpc RefundDeal(RefundDealRequest) returns (RefundDealResponse);
+}
+
+message CreatePaymentRequest {
+  string deal_id = 1;
+  string participant_id = 2;
+  string amount = 3;
+}
+
+message CreatePaymentResponse {
+  string payment_id = 1;
+  string status = 2;
+  string reserved_until = 3;
+}
+
+message RefundDealRequest {
+  string deal_id = 1;
+}
+
+message RefundDealResponse {
+  int32 refunded_count = 1;
+}

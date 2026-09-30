@@ -1,3 +1,30 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: payment
+  datasource:
+    url: jdbc:mysql://localhost:3306/harnkan_payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+    username: root
+    password: password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 10000
+  sql:
+    init:
+      mode: always
+
+server:
+  port: 8080
+
+grpc:
+  server:
+    port: 9091
+
+payment:
+  gateway-mode: ${PAYMENT_GATEWAY_MODE:fake}
+  stripe:
+    secret-key: ${STRIPE_SECRET_KEY:}
+    webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+    
