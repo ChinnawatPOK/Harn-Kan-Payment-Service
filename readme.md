@@ -65,6 +65,7 @@ Run from the repository directory to load its `.env`, or supply environment vari
 | `STRIPE_WEBHOOK_SECRET` | Reserved configuration for the future signed webhook |
 | `SERVER_PORT` | Optional REST port override; default `8080` |
 | `GRPC_SERVER_PORT` | Optional gRPC port override; default `9091` |
+| `JWT_SECRET` | Required for REST JWT verification; must match User Service exactly (at least 32 characters) |
 
 All application timestamps use **UTC**, stored as MySQL `DATETIME` / Java `LocalDateTime`. API timestamps are ISO-8601 without an offset; clients should interpret them as UTC. Set local SQL seed timestamps with `UTC_TIMESTAMP()`.
 
@@ -76,26 +77,9 @@ If MySQL already listens on 3306, do not start the Compose database. Use its cre
 CREATE DATABASE harnkan_payment;
 ```
 
-At startup Spring executes [schema.sql](src/main/resources/schema.sql) with `CREATE TABLE IF NOT EXISTS`:
+At startup Flyway runs [V1__create_payments.sql](src/main/resources/db/migration/V1__create_payments.sql) and records it in `flyway_schema_history`. The migration creates `payments` if it does not already exist. For a database previously initialized by `schema.sql`, Flyway baselines it at version 0 and then applies V1, preserving existing rows. Review the existing table structure before relying on this baseline; `CREATE TABLE IF NOT EXISTS` does not change an existing table.
 
-```sql
-CREATE TABLE IF NOT EXISTS payments (
-    id VARCHAR(32) PRIMARY KEY,
-    deal_id VARCHAR(32) NOT NULL,
-    participant_id VARCHAR(32) NOT NULL,
-    amount DECIMAL(10,2) NOT NULL,
-    payment_gateway_ref VARCHAR(255),
-    refund_gateway_ref VARCHAR(255),
-    payout_gateway_ref VARCHAR(255),
-    status VARCHAR(50) NOT NULL DEFAULT 'RESERVED',
-    reserved_until DATETIME,
-    is_confirmed_receipt BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-There are no additional indexes, foreign keys or check constraints. `deal_id` and `participant_id` are logical references. Existing tables are preserved, not migrated automatically.
+There are no additional indexes, foreign keys or check constraints. `deal_id` and `participant_id` are logical references. Add future schema changes as new versioned files under `src/main/resources/db/migration/`; do not edit an applied migration.
 
 ## gRPC APIs
 
@@ -198,14 +182,14 @@ Fake mode is the implemented phase and the default. It returns deterministic tes
 For a local fake-mode demo, apply [scripts/seed.sql](scripts/seed.sql) after the application has initialized the schema. These are explicit test records, never loaded automatically:
 
 ```bash
-docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root harnkan_payment' < scripts/seed.sql
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root harnkan_payment' < scripts/seed.sql
 ```
 
 Read or pay the seeded reservation:
 
 ```bash
-curl -i http://localhost:8080/api/payments/11111111111111111111111111111111
-curl -i -X POST http://localhost:8080/api/payments/11111111111111111111111111111111/pay
+curl -i -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/payments/11111111111111111111111111111111
+curl -i -X POST -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/payments/11111111111111111111111111111111/pay
 ```
 
 Refund the seeded `HELD` payment (second identical call returns zero):
@@ -223,7 +207,7 @@ As specified by the blueprint's “First implementation: FakePaymentGateway / La
 
 Before enabling Stripe, implement `StripePaymentGateway` behind the existing interface, verify webhook signatures over the raw request body, add persistent gateway idempotency/reconciliation, and reconcile asynchronous refunds and late capture after cancellation. Only confirmed successful refunds may return `RefundResult`; a pending external refund must stay `REFUND_PENDING`. See [Stripe idempotency](https://docs.stripe.com/api/idempotent_requests) and [webhook signature verification](https://docs.stripe.com/webhooks/signature).
 
-The local APIs currently have no authentication/TLS, as neither is defined in this blueprint. Real-money deployment needs the service's access-control and gateway integration phase.
+REST requests require a User Service JWT in `Authorization: Bearer <token>`. Payment Service verifies its HS256 signature using the same `JWT_SECRET`, checks expiration and requires a string `sub`. It does not check whether the user is still active or owns the requested payment. gRPC remains unauthenticated and must be kept on a trusted internal network. Real-money deployment also needs authorization checks, TLS and the gateway integration phase.
 
 ## Tests
 
