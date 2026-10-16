@@ -1,6 +1,4 @@
 spring:
-  config:
-    import: optional:file:.env[.properties]
   application:
     name: payment
   datasource:
@@ -27,7 +25,15 @@ grpc:
 
 payment:
   gateway-mode: ${PAYMENT_GATEWAY_MODE:fake}
+  jwt-secret: 9768318c34e318158c87bfb9004a71fbcb9badb1056f74b011d485e27bb4e9a8
   stripe:
     secret-key: ${STRIPE_SECRET_KEY:}
     webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
-    
+
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+  datasource:
+    url: jdbc:mysql://db:3306/harnkan_payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true

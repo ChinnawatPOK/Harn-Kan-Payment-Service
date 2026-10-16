@@ -17,25 +17,20 @@ Java 21, Spring Boot 4.0.8, Maven, Spring Web MVC, Spring JDBC, MySQL, protobuf 
 
 Prerequisites: Java 21 and Docker with Compose (or an existing MySQL 8 database). The Maven Wrapper downloads Maven and dependencies on the first build. Fake Gateway itself does not require internet access.
 
-1. Create local configuration:
+1. Set the local development configuration in `src/main/resources/application.yaml`. The `docker` profile in the same file changes the database host to `db:3306`. Set `payment.jwt-secret` to the same secret as User Service before using its JWTs.
+
+2. Start Payment Service and MySQL in Docker:
 
    ```bash
-   cp .env.example .env
+   docker compose up --build -d --wait
    ```
 
-   Edit `DB_PASSWORD` in `.env` to a local password. `.env` is ignored by Git. If `.env` already exists, keep it; do not overwrite existing credentials. Spring Boot and Docker Compose both read this file.
+   Compose builds the app image, creates `harnkan_payment`, and persists its data in a named volume. REST is available on `localhost:8080`, gRPC on `localhost:9091`, and MySQL on `localhost:3306`. The development MySQL password is `password` in both `docker-compose.yml` and `application.yaml`. If you change it, update both files; changing the Compose value does not change the password in an existing database volume. Use `docker compose logs -f payment-service` to view app logs and `docker compose down` to stop both services without removing database data.
 
-2. Start MySQL:
-
-   ```bash
-   docker compose up -d --wait
-   ```
-
-   Compose creates `harnkan_payment` and persists its data in a named volume. It binds MySQL to the loopback interface. The password initializes a **new** volume; changing `.env` does not change the password in an existing database.
-
-3. Build, test and run:
+To run the app directly on your machine while keeping only MySQL in Docker:
 
    ```bash
+   docker compose up -d db
    ./mvnw clean test
    ./mvnw spring-boot:run
    ```
@@ -51,27 +46,27 @@ To package and run a standalone executable JAR:
 java -jar target/payment-0.0.1-SNAPSHOT.jar
 ```
 
-Run from the repository directory to load its `.env`, or supply environment variables explicitly. Stop the app with Ctrl+C; `docker compose stop` stops MySQL without removing its data.
+Run from the repository directory. Stop a locally run app with Ctrl+C; `docker compose stop` stops containers without removing database data.
 
-## Environment variables
+## Configuration
 
 | Variable | Default / purpose |
 | --- | --- |
-| `DB_URL` | `jdbc:mysql://localhost:3306/harnkan_payment` |
-| `DB_USERNAME` | `root` |
-| `DB_PASSWORD` | Required; no committed default password |
+| `spring.datasource.url` | `jdbc:mysql://localhost:3306/harnkan_payment` locally; `db:3306` with the Docker profile |
+| `spring.datasource.username` | `root` |
+| `spring.datasource.password` | `password` for local development |
 | `PAYMENT_GATEWAY_MODE` | `fake`; only the fake adapter is implemented in this phase |
 | `STRIPE_SECRET_KEY` | Reserved configuration for the future Stripe adapter |
 | `STRIPE_WEBHOOK_SECRET` | Reserved configuration for the future signed webhook |
 | `SERVER_PORT` | Optional REST port override; default `8080` |
 | `GRPC_SERVER_PORT` | Optional gRPC port override; default `9091` |
-| `JWT_SECRET` | Required for REST JWT verification; must match User Service exactly (at least 32 characters) |
+| `payment.jwt-secret` | REST JWT verification; must match User Service exactly (at least 32 characters) |
 
 All application timestamps use **UTC**, stored as MySQL `DATETIME` / Java `LocalDateTime`. API timestamps are ISO-8601 without an offset; clients should interpret them as UTC. Set local SQL seed timestamps with `UTC_TIMESTAMP()`.
 
 ## Existing local MySQL
 
-If MySQL already listens on 3306, do not start the Compose database. Use its credentials in `.env` and create the database:
+If MySQL already listens on 3306, do not start the Compose database. Set its credentials in `application.yaml` and create the database:
 
 ```sql
 CREATE DATABASE harnkan_payment;
@@ -207,7 +202,7 @@ As specified by the blueprint's “First implementation: FakePaymentGateway / La
 
 Before enabling Stripe, implement `StripePaymentGateway` behind the existing interface, verify webhook signatures over the raw request body, add persistent gateway idempotency/reconciliation, and reconcile asynchronous refunds and late capture after cancellation. Only confirmed successful refunds may return `RefundResult`; a pending external refund must stay `REFUND_PENDING`. See [Stripe idempotency](https://docs.stripe.com/api/idempotent_requests) and [webhook signature verification](https://docs.stripe.com/webhooks/signature).
 
-REST requests require a User Service JWT in `Authorization: Bearer <token>`. Payment Service verifies its HS256 signature using the same `JWT_SECRET`, checks expiration and requires a string `sub`. It does not check whether the user is still active or owns the requested payment. gRPC remains unauthenticated and must be kept on a trusted internal network. Real-money deployment also needs authorization checks, TLS and the gateway integration phase.
+REST requests require a User Service JWT in `Authorization: Bearer <token>`. Payment Service verifies its HS256 signature using `payment.jwt-secret`, which must match User Service, checks expiration and requires a string `sub`. It does not check whether the user is still active or owns the requested payment. gRPC remains unauthenticated and must be kept on a trusted internal network. Real-money deployment also needs authorization checks, TLS and the gateway integration phase.
 
 ## Tests
 

@@ -1,0 +1,9 @@
+.git
+.idea
+.env
+.env.*
+!.env.example
+target
+*.log
+readme.md
+Harn-Kan-Payment-Service-Blueprint.md

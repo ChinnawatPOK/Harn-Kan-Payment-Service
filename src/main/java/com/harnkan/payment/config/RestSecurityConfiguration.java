@@ -32,10 +32,10 @@ public class RestSecurityConfiguration {
     }
 
     @Bean
-    JwtDecoder jwtDecoder(@Value("${JWT_SECRET}") String secret) {
+    JwtDecoder jwtDecoder(@Value("${payment.jwt-secret}") String secret) {
         byte[] key = secret.getBytes(StandardCharsets.UTF_8);
         if (secret.length() < 32 || key.length < 32) {
-            throw new IllegalArgumentException("JWT_SECRET must contain at least 32 characters");
+            throw new IllegalArgumentException("payment.jwt-secret must contain at least 32 characters");
         }
 
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(new SecretKeySpec(key, "HmacSHA256"))
