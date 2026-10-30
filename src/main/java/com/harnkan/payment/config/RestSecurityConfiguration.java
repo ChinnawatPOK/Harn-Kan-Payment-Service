@@ -26,8 +26,23 @@ public class RestSecurityConfiguration {
     SecurityFilterChain restSecurityFilterChain(HttpSecurity http) throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()));
+                .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/webhooks/stripe").permitAll()
+                        .anyRequest().authenticated())
+                .exceptionHandling(errors -> errors.accessDeniedHandler((request, response, exception) -> {
+                    response.setStatus(403);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"code\":\"FORBIDDEN\",\"message\":\"Access denied\",\"timestamp\":\""
+                            + java.time.Instant.now() + "\"}");
+                }))
+                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults())
+                        .authenticationEntryPoint((request, response, exception) -> {
+                            response.setStatus(401);
+                            response.setHeader("WWW-Authenticate", "Bearer");
+                            response.setContentType("application/json");
+                            response.getWriter().write("{\"code\":\"UNAUTHORIZED\",\"message\":\"Valid JWT required\",\"timestamp\":\""
+                                    + java.time.Instant.now() + "\"}");
+                        }));
         return http.build();
     }
 
