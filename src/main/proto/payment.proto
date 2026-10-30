@@ -8,6 +8,9 @@ option java_outer_classname = "PaymentProto";
 
 service PaymentService {
   rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
+  rpc CancelPayment(CancelPaymentRequest) returns (CancelPaymentResponse);
+  rpc ConfirmReceipt(ConfirmReceiptRequest) returns (ConfirmReceiptResponse);
+  rpc ReleaseFunds(ReleaseFundsRequest) returns (ReleaseFundsResponse);
   rpc RefundDeal(RefundDealRequest) returns (RefundDealResponse);
 }
 
@@ -29,4 +32,25 @@ message RefundDealRequest {
 
 message RefundDealResponse {
   int32 refunded_count = 1;
+  repeated PaymentStatusItem payments = 2;
+}
+
+message CancelPaymentRequest { string payment_id = 1; }
+message CancelPaymentResponse { string payment_id = 1; string status = 2; }
+message ConfirmReceiptRequest { string payment_id = 1; string participant_id = 2; }
+message ConfirmReceiptResponse {
+  string payment_id = 1;
+  string status = 2;
+  bool is_confirmed_receipt = 3;
+}
+message ReleaseFundsRequest { string deal_id = 1; string creator_id = 2; }
+message ReleaseFundsResponse {
+  int32 released_count = 1;
+  string total_amount = 2;
+  repeated PaymentStatusItem payments = 3;
+}
+message PaymentStatusItem {
+  string payment_id = 1;
+  string participant_id = 2;
+  string status = 3;
 }

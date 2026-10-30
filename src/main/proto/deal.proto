@@ -1,0 +1,17 @@
+syntax = "proto3";
+package harnkan.deal;
+option java_package = "com.harnkan.contract.deal";
+option java_multiple_files = true;
+option java_outer_classname = "DealProto";
+
+// Payment's subset of the Deal contract (api-design.md section 3.2).
+service DealService {
+  rpc UpdateParticipantPayment(UpdateParticipantPaymentRequest) returns (UpdateParticipantPaymentResponse);
+}
+message UpdateParticipantPaymentRequest {
+  string deal_id = 1;
+  string participant_id = 2;
+  string payment_id = 3;
+  string status = 4;
+}
+message UpdateParticipantPaymentResponse { string deal_status = 1; }
