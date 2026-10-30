@@ -11,7 +11,17 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
-    public record ErrorBody(String code, String message) {}
+    public record ErrorBody(String code, String message, java.time.Instant timestamp) {}
+
+    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
+    ResponseEntity<ErrorBody> forbidden(org.springframework.security.access.AccessDeniedException exception) {
+        return error(HttpStatus.FORBIDDEN, "FORBIDDEN", exception.getMessage());
+    }
+
+    @ExceptionHandler(InvalidStripeWebhookException.class)
+    ResponseEntity<ErrorBody> stripeWebhook(InvalidStripeWebhookException exception) {
+        return error(HttpStatus.BAD_REQUEST, "INVALID_STRIPE_WEBHOOK", exception.getMessage());
+    }
 
     @ExceptionHandler(PaymentNotFoundException.class)
     ResponseEntity<ErrorBody> notFound(PaymentNotFoundException exception) {
@@ -56,6 +66,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     private ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message) {
-        return ResponseEntity.status(status).body(new ErrorBody(code, message));
+        return ResponseEntity.status(status).body(new ErrorBody(code, message, java.time.Instant.now()));
     }
 }
