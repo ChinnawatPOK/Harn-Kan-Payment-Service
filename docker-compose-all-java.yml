@@ -1,0 +1,90 @@
+# Run from this repository:
+# docker compose -f docker-compose-all-java.yml up -d --build
+# Requires ../Harn-Kan-Deal-Service alongside this repository.
+name: harnkan-all-java
+
+services:
+  payment-service:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080" # REST API
+      - "9091:9091" # gRPC
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      PAYMENT_GATEWAY_MODE: ${PAYMENT_GATEWAY_MODE:-fake}
+      PAYMENT_DEV_ENABLED: ${PAYMENT_DEV_ENABLED:-false}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      DEAL_GRPC_TARGET: deal-service:9090
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USERNAME: harnkan
+      RABBITMQ_PASSWORD: harnkan
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: password
+    depends_on:
+      db:
+        condition: service_healthy
+
+  deal-service:
+    build: ../Harn-Kan-Deal-Service
+    restart: unless-stopped
+    ports:
+      - "8081:8081" # REST API
+      - "9090:9090" # gRPC
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/deals?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: password
+      PAYMENT_SERVICE_HOST: payment-service
+      PAYMENT_SERVICE_PORT: 9091
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: harnkan
+      RABBITMQ_PASSWORD: harnkan
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      payment-service:
+        condition: service_started
+
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: deals
+      TZ: Asia/Bangkok
+    command: --default-time-zone='+07:00'
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    hostname: harnkan-rabbitmq
+    ports:
+      - "5672:5672" # AMQP
+      - "15672:15672" # Management UI: harnkan / harnkan
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ../Harn-Kan-Deal-Service/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-harnkan.conf:ro
+      - ../Harn-Kan-Deal-Service/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_data:
+  rabbitmq_data:

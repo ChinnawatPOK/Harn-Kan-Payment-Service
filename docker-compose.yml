@@ -6,8 +6,21 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"   # Payment REST API
-      - "9091:9091"   # Payment gRPC: CreatePayment, RefundDeal
+      - "9091:9091"   # Internal Payment gRPC (five RPCs)
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://host.docker.internal:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:mysql://host.docker.internal:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true}
+      SPRING_DATASOURCE_USERNAME:
+      SPRING_DATASOURCE_PASSWORD:
+      PAYMENT_JWT_SECRET:
+      PAYMENT_DELIVERY_ENABLED: ${PAYMENT_DELIVERY_ENABLED:-true}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      PAYMENT_GATEWAY_MODE: ${PAYMENT_GATEWAY_MODE:-fake}
+      PAYMENT_DEV_ENABLED: ${PAYMENT_DEV_ENABLED:-false}
+      DEAL_GRPC_TARGET: ${DEAL_GRPC_TARGET:-host.docker.internal:9090}
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-host.docker.internal}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
     extra_hosts:
       - "host.docker.internal:host-gateway"

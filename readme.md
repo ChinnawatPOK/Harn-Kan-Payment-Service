@@ -1,230 +1,160 @@
 # Harn Kan Payment Service
 
-Payment Service implements the [project blueprint](Harn-Kan-Payment-Service-Blueprint.md) in the existing `com.harnkan:payment` Maven project. It owns payment reservations, payment status and deal refunds. It does not own deals, slots, users or notifications.
+Payment reservations, Stripe sandbox/fake payments, cancellation, refunds, receipt confirmation and ledger payouts, following `api-design.md` sections 3.2 and 4. REST runs on **8080**, gRPC on **9091**, with MySQL database **payment**. Requires Java 21.
 
-## Architecture
+## Implemented APIs
+
+| Code | REST endpoint | Purpose |
+| --- | --- | --- |
+| PY5 | `POST /api/payments/{paymentId}/pay` | Start an unexpired reservation; return `PAYMENT_PENDING` and a fake `clientSecret` |
+| PY2 | `GET /api/payments/{paymentId}` | Read a payment; money is a JSON number and timestamps include UTC `Z` |
+| PY1 | `POST /webhooks/stripe` | Receive signed Stripe snapshot events; no JWT required |
+| PY4 | `POST /internal/dev/payments/{paymentId}/simulate-success` | Mark a pending fake payment `HELD`; requires explicit development opt-in |
+
+Client REST endpoints and the development simulator require a User Service HS256 JWT with string `sub` and `exp`. GET/pay enforce ownership using the verified JWT subject. Client-supplied `X-User-Id` is ignored. JWT verification stays in Payment until the coordinated Gateway migration described in specification section 7; it has not been removed.
+
+Stripe mode uses the official Stripe Java SDK to create THB PaymentIntents (baht × 100 satang) with `metadata.paymentId` and idempotency key `pay-<paymentId>`. `/pay` returns a `clientSecret` for the mobile PaymentSheet; it does not confirm the payment. Automatic payment methods are enabled with redirects excluded. The mobile app uses the sandbox's publishable key independently; backend credentials are never returned to it.
+
+`POST /webhooks/stripe` exists only in Stripe mode and verifies the `Stripe-Signature` header over the exact raw body with a five-minute timestamp tolerance. It accepts `payment_intent.succeeded`, `payment_intent.payment_failed` and `payment_intent.canceled`; other signed events and unrelated sandbox payments are acknowledged without mutation. Stable snapshot fields are parsed after verification, so the CLI's `2020-03-02` event version is supported without a typed SDK event-version mismatch. Invalid/missing signatures or invalid payloads return 400; database/lock failures return an error so Stripe can retry. Status changes enqueue durable Deal updates; the webhook does not wait for Deal.
+
+Stripe refunds use the PaymentIntent and `refund-<paymentId>` as the idempotency key. Before creating a refund, the adapter reads any existing refund's current status, preserving retries even when a previous idempotent response said `pending`. Only `succeeded` becomes REFUNDED; pending/failed/requires-action refunds stay REFUND_PENDING. A permanently failed/canceled provider refund requires investigation rather than silently creating another refund. Payout remains a deterministic simulated ledger and does not call Stripe Connect.
+
+The source of truth for Payment's gRPC server is [payment.proto](src/main/proto/payment.proto):
+
+| RPC | Request | Result / behavior |
+| --- | --- | --- |
+| `CreatePayment` | `deal_id`, `participant_id`, decimal string `amount` | `payment_id`, `status`, `reserved_until`; creates a five-minute reservation |
+| `CancelPayment` | `payment_id` | `payment_id`, `status`; RESERVED/PAYMENT_PENDING → FAILED; repeating FAILED is a no-op |
+| `RefundDeal` | `deal_id` | `refunded_count`, `payments[]`; unpaid → FAILED, HELD/REFUND_PENDING → refund retry |
+| `ConfirmReceipt` | `payment_id`, `participant_id` | `payment_id`, `status`, `is_confirmed_receipt`; validates owner and HELD, sets flag; safe to retry after payout |
+| `ReleaseFunds` | `deal_id`, `creator_id` | `released_count`, `total_amount`, `payments[]`; confirmed HELD/PAYOUT_PENDING → RELEASED |
+
+RPC paths use service `harnkan.payment.PaymentService`. `payments[]` items contain `payment_id`, `participant_id`, `status`. Existing protobuf field numbers are preserved. Callers must update their proto copies to consume the new RPCs and response fields. gRPC uses a trusted internal network, with no JWT, and must not be exposed publicly.
+
+## State and retry behavior
 
 ```text
-Deal Service --gRPC--> Payment Service --JdbcTemplate--> MySQL
-Client       --REST--> Payment Service --PaymentGateway--> Fake Gateway
+CreatePayment -> RESERVED -> pay -> PAYMENT_PENDING -> simulate-success -> HELD
+RESERVED / PAYMENT_PENDING -> cancel / expiry / failure -> FAILED
+HELD -> RefundDeal -> REFUND_PENDING -> REFUNDED
+HELD -> ConfirmReceipt -> HELD (is_confirmed_receipt = true)
+HELD (all confirmed) -> ReleaseFunds -> PAYOUT_PENDING -> RELEASED
 ```
 
-Payment Service is a **gRPC server only**. There are no outbound Deal Service calls. REST runs on **8080**, gRPC on **9091**, and MySQL on **localhost:3306**, database **harnkan_payment**.
+- Payment does not have a `RECEIVED` state; that is a Deal participant state.
+- Duplicate active reservations are rejected with `ALREADY_EXISTS`. Active includes payout states, preventing a second reservation after release.
+- Per-deal MySQL advisory locks serialize mutations across instances. Database-only transactions atomically save a status and its delivery record. Gateway calls use deterministic identities so retries after a crash do not create another fake refund/payout.
+- `RefundDeal` returns partial progress, including `REFUND_PENDING`, instead of discarding the response on a gateway failure. `refunded_count` counts newly refunded rows. Deal's scheduler owns refund retries.
+- `ReleaseFunds` rejects unconfirmed or unpaid participants, excluding FAILED/REFUNDED rows. Failed payouts remain PAYOUT_PENDING; retry skips RELEASED rows. `released_count` and `total_amount` include all released rows on every retry, making completion and totals stable. A payout recipient is bound on the first attempt and cannot change on retry.
+- Once any payout starts, `RefundDeal` rejects the deal. Deal is responsible for enforcing its cancellation/purchase rules before calling Payment.
+- Duplicate/out-of-order callbacks do not reverse completed states. Internal gateway-result handlers refund a late success after cancellation rather than resurrecting the participant. Stripe webhooks apply these same transition rules.
 
-Java 21, Spring Boot 4.0.8, Maven, Spring Web MVC, Spring JDBC, MySQL, protobuf and gRPC are used. There is no JPA/Hibernate. The existing Boot 4 `spring-boot-starter-webmvc` is retained. A Spring-managed gRPC Java server starts and stops with the application; its port property is `grpc.server.port`.
+The payout policy follows the **proposed defaults** in specification section 9: ledger simulation, wait for all participants to confirm, no auto-confirm. These policies still require team agreement. Host does not get a payment reservation; Deal passes only paying participants to Payment and supplies the host ID when releasing funds.
 
-## Start locally
+## Deal integration and reliable delivery
 
-Prerequisites: Java 21 and Docker with Compose (or an existing MySQL 8 database). The Maven Wrapper downloads Maven and dependencies on the first build. Fake Gateway itself does not require internet access.
+Payment calls `harnkan.deal.DealService/UpdateParticipantPayment` with `deal_id`, `participant_id`, `payment_id`, `status` (PAYMENT_PENDING / HELD / FAILED). The local client contract is [deal.proto](src/main/proto/deal.proto).
 
-1. Set the local development configuration in `src/main/resources/application.yaml`. The `docker` profile in the same file changes the database host to `db:3306`. Set `payment.jwt-secret` to the same secret as User Service before using its JWTs.
+Pay, reservation expiry on pay, simulation and gateway-result handlers queue a Deal update in the same database transaction as the status change, then attempt delivery after releasing the payment mutation lock. A worker retries failures every five seconds; the latest state survives restarts. A separate delivery lock serializes concurrent sends without blocking Deal-initiated payment mutations. **RPCs initiated by Deal never call Deal back**; their responses carry the state instead.
 
-2. Start Payment Service and MySQL in Docker:
+The neighboring Deal repository currently provides `ConfirmSlot`/`ReleaseSlot`, not the new `UpdateParticipantPayment` RPC. It must implement specification section 3.2 and update its Payment proto before the full application flow works. Until then, Payment keeps retrying queued updates. This change does not modify the Deal repository.
 
-   ```bash
-   docker compose up --build -d --wait
-   ```
+Payment publishes persistent JSON events to the durable topic exchange `harnkan.events`:
 
-   Compose builds the app image, creates `harnkan_payment`, and persists its data in a named volume. REST is available on `localhost:8080`, gRPC on `localhost:9091`, and MySQL on `localhost:3306`. The development MySQL password is `password` in both `docker-compose.yml` and `application.yaml`. If you change it, update both files; changing the Compose value does not change the password in an existing database volume. Use `docker compose logs -f payment-service` to view app logs and `docker compose down` to stop both services without removing database data.
-
-To run the app directly on your machine while keeping only MySQL in Docker:
-
-   ```bash
-   docker compose up -d db
-   ./mvnw clean test
-   ./mvnw spring-boot:run
-   ```
-
-   Windows: use `mvnw.cmd` in place of `./mvnw`. An installed Maven can run the same goals with `mvn`.
-
-   Expected startup messages include `Tomcat started on port 8080` and `Payment gRPC server listening on 9091`. The app fails startup if MySQL cannot be reached or the schema cannot be initialized.
-
-To package and run a standalone executable JAR:
-
-```bash
-./mvnw clean package
-java -jar target/payment-0.0.1-SNAPSHOT.jar
-```
-
-Run from the repository directory. Stop a locally run app with Ctrl+C; `docker compose stop` stops containers without removing database data.
-
-## Configuration
-
-| Variable | Default / purpose |
+| Routing key | Payload fields (besides event envelope) |
 | --- | --- |
-| `spring.datasource.url` | `jdbc:mysql://localhost:3306/harnkan_payment` locally; `db:3306` with the Docker profile |
-| `spring.datasource.username` | `root` |
-| `spring.datasource.password` | `password` for local development |
-| `PAYMENT_GATEWAY_MODE` | `fake`; only the fake adapter is implemented in this phase |
-| `STRIPE_SECRET_KEY` | Reserved configuration for the future Stripe adapter |
-| `STRIPE_WEBHOOK_SECRET` | Reserved configuration for the future signed webhook |
-| `SERVER_PORT` | Optional REST port override; default `8080` |
-| `GRPC_SERVER_PORT` | Optional gRPC port override; default `9091` |
-| `payment.jwt-secret` | REST JWT verification; must match User Service exactly (at least 32 characters) |
+| `payment.refunded` | `dealId`, `paymentId`, `participantId`, `amount` |
+| `payout.released` | `dealId`, `creatorId`, `totalAmount` |
 
-All application timestamps use **UTC**, stored as MySQL `DATETIME` / Java `LocalDateTime`. API timestamps are ISO-8601 without an offset; clients should interpret them as UTC. Set local SQL seed timestamps with `UTC_TIMESTAMP()`.
+The envelope contains `eventId`, `eventType`, `occurredAt` (UTC). Amounts in events are decimal strings. The refund payload/envelope follows the local Deal event convention; the referenced `notification-rabbitmq-spec.md` is absent from this workspace, so its exact consumer contract has not been verified. Coordinate this payload with Notification Service.
 
-## Existing local MySQL
+Migration V2 adds durable Deal delivery, event outbox and payout-recipient tables; V1 and the existing payments table are unchanged. Events are acknowledged in the database only after RabbitMQ publisher confirmation and successful routing. Failed/unroutable events remain pending. Delivery is at least once: consumers must deduplicate by `eventId`. Notification owns queues/bindings; if no queue is bound, the event stays pending. Database delivery records are retained after successful event delivery to prevent duplicate event creation on retries.
 
-If MySQL already listens on 3306, do not start the Compose database. Set its credentials in `application.yaml` and create the database:
+Deal owns reservation/deal-expiry scheduling and refund/payout retries (specification section 3.3). Payment also checks Stripe every minute for PAYMENT_PENDING rows unchanged for over ten minutes, and retries REFUND_PENDING rows (including automatic refunds for late successes). Owner-authorized GET can reconcile the same states, plus older FAILED rows with a gateway reference. Provider outages leave the persisted status readable; repair retries later. Deal and Payment retry paths share the per-deal lock and provider identities.
 
-```sql
-CREATE DATABASE harnkan_payment;
-```
+Payment's delivery worker independently retries outbound Deal updates and RabbitMQ events.
 
-At startup Flyway runs [V1__create_payments.sql](src/main/resources/db/migration/V1__create_payments.sql) and records it in `flyway_schema_history`. The migration creates `payments` if it does not already exist. For a database previously initialized by `schema.sql`, Flyway baselines it at version 0 and then applies V1, preserving existing rows. Review the existing table structure before relying on this baseline; `CREATE TABLE IF NOT EXISTS` does not change an existing table.
+## Run locally
 
-There are no additional indexes, foreign keys or check constraints. `deal_id` and `participant_id` are logical references. Add future schema changes as new versioned files under `src/main/resources/db/migration/`; do not edit an applied migration.
+Provide an existing MySQL 8 instance with database `payment`; Flyway applies migrations automatically. Configure datasource credentials using Spring environment variables. Run RabbitMQ and a Deal service implementing the new contract for full integration.
 
-## gRPC APIs
-
-The source of truth is [payment.proto](src/main/proto/payment.proto). Maven generates protobuf messages under `com.harnkan.contract.payment` and `PaymentServiceGrpc` during `generate-sources`. Deal Service must mirror this exact contract independently and target `localhost:9091`.
-
-| RPC | Request | Response |
-| --- | --- | --- |
-| `harnkan.payment.PaymentService/CreatePayment` | `deal_id`, `participant_id`, decimal string `amount` | `payment_id`, `status`, `reserved_until` |
-| `harnkan.payment.PaymentService/RefundDeal` | `deal_id` | `refunded_count` |
-
-IDs supplied by callers must contain 1–32 ASCII letters, digits, underscores or hyphens. Generated payment IDs are 32 lowercase hexadecimal characters. Amounts must be positive, fit `DECIMAL(10,2)` and have at most two decimal places; no floating-point conversion or silent rounding is used.
-
-With `grpcurl` installed (server reflection is enabled):
+Spring Boot reads the repository's local `.env` automatically (optional Spring config import); shell environment variables override it. `.env` is excluded from Git and Docker build contexts. `.env.example` contains placeholders for a new machine. The supplied local configuration uses Stripe sandbox mode; no credentials are stored in source files.
 
 ```bash
-grpcurl -plaintext localhost:9091 list
+# From the repository, using the local .env:
+./mvnw spring-boot:run
+```
 
-grpcurl -plaintext -d '{"dealId":"22222222222222222222222222222222","participantId":"33333333333333333333333333333333","amount":"60.00"}' \
+In another terminal, authorize Stripe CLI for the same sandbox and leave the listener running:
+
+```bash
+stripe login
+stripe listen --events payment_intent.succeeded,payment_intent.payment_failed,payment_intent.canceled --forward-to localhost:8080/webhooks/stripe
+```
+
+Set `STRIPE_WEBHOOK_SECRET` in local `.env` to the listener's signing secret and restart Payment after changing it. CLI signing secrets and Dashboard endpoint secrets are distinct. A local CLI listener does not require a Dashboard webhook URL. For deployed servers, register the HTTPS endpoint and use that endpoint's signing secret.
+
+To use fake mode instead:
+
+```bash
+PAYMENT_GATEWAY_MODE=fake PAYMENT_DEV_ENABLED=true ./mvnw spring-boot:run
+```
+
+The existing `docker-compose.yml` runs Payment against MySQL on the host; it does not provision a database, Deal or RabbitMQ. `docker compose up --build -d` builds and starts Payment. Container-to-host dependencies default to `host.docker.internal`; override the targets when joining a shared Compose network.
+
+| Environment variable | Default / purpose |
+| --- | --- |
+| `SPRING_DATASOURCE_URL` | Local MySQL database `payment` |
+| `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | Local development datasource credentials |
+| `PAYMENT_JWT_SECRET` | Must match User Service; overrides the existing local development default |
+| `PAYMENT_GATEWAY_MODE` | `fake` by default; `stripe` in the configured local `.env` |
+| `PAYMENT_DEV_ENABLED` | `false`; set `true` to enable fake simulation |
+| `DEAL_GRPC_TARGET` | `localhost:9090` when running directly |
+| `RABBITMQ_HOST` / `RABBITMQ_PORT` | `localhost` / `5672` |
+| `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | RabbitMQ credentials |
+| `PAYMENT_DELIVERY_ENABLED` | `true`; disables scheduled delivery only, not immediate Deal attempts |
+| `SERVER_PORT` / `GRPC_SERVER_PORT` | `8080` / `9091` |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Required in Stripe mode; startup fails if either is missing |
+| `STRIPE_PUBLISHABLE_KEY` | Saved in local `.env` for mobile configuration; not consumed/exposed by backend |
+
+Gateway must block `/internal/**`. The simulator also requires a valid JWT and the explicit fake/dev configuration; do not enable it on a public instance.
+
+## Try the fake flow
+
+Create a reservation using gRPC (reflection is enabled):
+
+```bash
+grpcurl -plaintext -d '{"dealId":"22222222222222222222222222222222","participantId":"333333333333333333333333","amount":"189.00"}' \
   localhost:9091 harnkan.payment.PaymentService/CreatePayment
-
-grpcurl -plaintext -d '{"dealId":"22222222222222222222222222222222"}' \
-  localhost:9091 harnkan.payment.PaymentService/RefundDeal
 ```
 
-Alternatively, pass `-import-path src/main/proto -proto payment.proto` before the host to use the local contract.
-
-Errors map to `INVALID_ARGUMENT`, `ALREADY_EXISTS`, `NOT_FOUND`, `FAILED_PRECONDITION`, `UNAVAILABLE` and `INTERNAL`. Remote callers never receive stack traces or raw gateway errors.
-
-## REST APIs
-
-| Method | Path | Behavior |
-| --- | --- | --- |
-| `POST` | `/api/payments/{paymentId}/pay` | Start an existing, unexpired `RESERVED` payment |
-| `GET` | `/api/payments/{paymentId}` | Read the client-facing payment state |
-
-Use the payment ID returned by `CreatePayment`:
+Set `PAYMENT_ID` to the returned ID and `ACCESS_TOKEN` to a User Service JWT whose `sub` matches `participantId`:
 
 ```bash
-PAYMENT_ID=replace_with_returned_payment_id
-curl -i "http://localhost:8080/api/payments/$PAYMENT_ID"
-curl -i -X POST "http://localhost:8080/api/payments/$PAYMENT_ID/pay"
+curl -H "Authorization: Bearer $ACCESS_TOKEN" "http://localhost:8080/api/payments/$PAYMENT_ID"
+curl -X POST -H "Authorization: Bearer $ACCESS_TOKEN" "http://localhost:8080/api/payments/$PAYMENT_ID/pay"
+curl -X POST -H "Authorization: Bearer $ACCESS_TOKEN" "http://localhost:8080/internal/dev/payments/$PAYMENT_ID/simulate-success"
 ```
 
-Pay response:
+Deal normally calls ConfirmReceipt and ReleaseFunds. To test directly with grpcurl, send `paymentId` + `participantId` to ConfirmReceipt, then `dealId` + `creatorId` to ReleaseFunds. Both are internal RPCs.
 
-```json
-{"paymentId":"...","status":"PAYMENT_PENDING","clientSecret":"fake_secret_..."}
-```
+REST errors include `code`, `message`, `timestamp`: 400 invalid input/webhook signature, 401 invalid/missing JWT, 403 wrong owner, 404 missing payment or disabled dev simulator, 409 invalid state/expired reservation, 502 gateway failure, 503 lock timeout. gRPC maps these to INVALID_ARGUMENT, PERMISSION_DENIED, NOT_FOUND, ALREADY_EXISTS, FAILED_PRECONDITION, UNAVAILABLE or INTERNAL.
 
-Read response:
-
-```json
-{
-  "paymentId":"...",
-  "dealId":"...",
-  "participantId":"...",
-  "amount":"60.00",
-  "status":"RESERVED",
-  "reservedUntil":"2026-09-30T14:45:00",
-  "confirmedReceipt":false
-}
-```
-
-There is no card-number/CVV DTO. The pay endpoint requires no request body. Missing payments return 404; expired reservations, invalid states and duplicates return 409; gateway errors return 502; invalid input returns 400; unexpected failures return 500. A lock timeout returns 503 so callers can retry.
-
-```json
-{"code":"PAYMENT_EXPIRED","message":"Payment reservation has expired"}
-```
-
-## Payment lifecycle and retry behavior
-
-```text
-CreatePayment -> RESERVED (UTC now + 5 minutes; no gateway call)
-RESERVED -> PAYMENT_PENDING (REST pay starts a gateway transaction)
-PAYMENT_PENDING -> HELD (successful callback)
-PAYMENT_PENDING -> FAILED (failed callback)
-RESERVED -> FAILED (pay attempted at/after expiry)
-
-RefundDeal:
-  RESERVED / PAYMENT_PENDING -> FAILED (no external refund)
-  HELD -> REFUND_PENDING -> REFUNDED
-  REFUND_PENDING -> retry gateway refund -> REFUNDED
-  FAILED / REFUNDED -> skip
-```
-
-`PAYOUT_PENDING` and `RELEASED` are reserved statuses; payout is outside this phase.
-
-An active payment in `RESERVED`, `PAYMENT_PENDING`, `HELD` or `REFUND_PENDING` prevents another reservation for the same deal and participant. Expiry is checked when pay is requested; there is no scheduled expiry worker in this blueprint. Until an expired reservation is changed to `FAILED`, its `RESERVED` status still blocks a duplicate.
-
-Mutations acquire a **MySQL session advisory lock per deal**, including the duplicate check and initial insert. This enforces the duplicate/refund rules across multiple app instances without changing the required table constraints. All protected SQL reuses the lock's connection; statements autocommit. No database transaction spans a gateway call. Locks are released in `finally`, including when validation or a gateway call fails. Concurrent unrelated deals can proceed independently. Lock names normalize ASCII case to match MySQL's default case-insensitive ID comparison.
-
-`REFUND_PENDING` is persisted before calling the gateway. Gateway failure leaves it retryable; successful refunds save their reference and become `REFUNDED`. If one row fails, other rows are processed and the RPC returns `UNAVAILABLE`; retry skips rows already completed. `refunded_count` counts only rows newly marked `REFUNDED` in that successful invocation, not historical refunds.
-
-Gateway implementations must deduplicate start requests using payment ID and full refunds using gateway payment reference, including retries after a process crash between gateway success and a database write. Fake references are deterministic across restarts. Repeated callback events cannot revert terminal states. Per the blueprint, a success event arriving after cancellation does not resurrect a `FAILED` payment; real gateway capture/cancellation reconciliation is part of the later Stripe integration.
-
-## Fake Gateway and local seeds
-
-Fake mode is the implemented phase and the default. It returns deterministic test references and client secrets, does not collect money and does not automatically simulate a success callback. Business service callback handlers are covered by tests; no unauthenticated callback endpoint is exposed.
-
-For a local fake-mode demo, apply [scripts/seed.sql](scripts/seed.sql) after the application has initialized the schema. These are explicit test records, never loaded automatically:
+## Verification
 
 ```bash
-docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root harnkan_payment' < scripts/seed.sql
-```
-
-Read or pay the seeded reservation:
-
-```bash
-curl -i -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/payments/11111111111111111111111111111111
-curl -i -X POST -H "Authorization: Bearer $ACCESS_TOKEN" http://localhost:8080/api/payments/11111111111111111111111111111111/pay
-```
-
-Refund the seeded `HELD` payment (second identical call returns zero):
-
-```bash
-grpcurl -plaintext -d '{"dealId":"55555555555555555555555555555555"}' \
-  localhost:9091 harnkan.payment.PaymentService/RefundDeal
-```
-
-The seed uses `INSERT IGNORE` to preserve existing records; rerunning it does not reset payment state or extend an old reservation.
-
-## Stripe phase
-
-As specified by the blueprint's “First implementation: FakePaymentGateway / Later: StripePaymentGateway”, Stripe SDK integration is deferred. `PAYMENT_GATEWAY_MODE=stripe` **fails startup explicitly**, rather than processing fake transactions under a real gateway setting. The Stripe configuration variables are reserved and never logged. `/api/payments/stripe/webhook` is not registered in fake mode.
-
-Before enabling Stripe, implement `StripePaymentGateway` behind the existing interface, verify webhook signatures over the raw request body, add persistent gateway idempotency/reconciliation, and reconcile asynchronous refunds and late capture after cancellation. Only confirmed successful refunds may return `RefundResult`; a pending external refund must stay `REFUND_PENDING`. See [Stripe idempotency](https://docs.stripe.com/api/idempotent_requests) and [webhook signature verification](https://docs.stripe.com/webhooks/signature).
-
-REST requests require a User Service JWT in `Authorization: Bearer <token>`. Payment Service verifies its HS256 signature using `payment.jwt-secret`, which must match User Service, checks expiration and requires a string `sub`. It does not check whether the user is still active or owns the requested payment. gRPC remains unauthenticated and must be kept on a trusted internal network. Real-money deployment also needs authorization checks, TLS and the gateway integration phase.
-
-## Tests
-
-```bash
-# Unit, H2 JDBC mapping/SQL, in-process gRPC, REST MVC and application context tests
 ./mvnw clean test
-
-# All tests plus a separate disposable MySQL 8.4 container, real network REST/gRPC,
-# concurrency, expiry persistence and refund recovery (Docker required)
-./mvnw -Pmysql-it verify
+./mvnw -DskipTests package
 ```
 
-If Testcontainers cannot discover Docker Desktop on macOS, set `DOCKER_HOST` to the Docker context's socket, for example:
+Tests require Docker. Testcontainers starts isolated MySQL 8.4 and RabbitMQ containers; it does not touch the configured local database. Tests exercise actual REST and gRPC, owner checks, expiry persistence, concurrent duplicate reservations, refund/payout failures and retries, receipt idempotency, late callbacks, durable Deal updates, lock ordering, and RabbitMQ confirmed/unroutable delivery. The external Deal client is mocked; real cross-service compatibility is not claimed.
+
+Stripe-specific tests exercise the SDK against a local HTTP fixture, raw-body signatures and tampering, old-version snapshots, mode selection, reconciliation and refund state handling. Normal tests never call Stripe or load the local secrets. An explicit sandbox smoke test is available:
 
 ```bash
-DOCKER_HOST=unix:///Users/your-user/.docker/run/docker.sock ./mvnw -Pmysql-it verify
+RUN_STRIPE_SANDBOX_TEST=true ./mvnw -Dtest=StripeSandboxIT test
 ```
 
-Integration tests use a separate temporary database/container and do not modify the local `harnkan_payment` data. Reports are in `target/surefire-reports` and `target/failsafe-reports`.
+This opt-in test uses only `sk_test_`/`rk_test_` keys from the environment or local `.env`, creates a THB test payment, confirms it with `pm_card_visa`, and refunds it. It also verifies repeat starts/refunds are idempotent. It does not charge real money.
 
-Implementation references: [gRPC Java Maven generation](https://github.com/grpc/grpc-java#generated-code), [Boot 4 WebMvcTest](https://docs.spring.io/spring-boot/4.0/api/java/org/springframework/boot/webmvc/test/autoconfigure/WebMvcTest.html), and [MySQL advisory locking](https://dev.mysql.com/doc/refman/8.4/en/locking-functions.html).
-
-### Compatibility notes against the blueprint
-
-The blueprint requests JUnit 5 while also requiring the existing Spring Boot 4.0.8 version. Spring Framework 7's [SpringExtension requires JUnit Jupiter 6 or newer](https://docs.spring.io/spring-framework/docs/7.0.5/javadoc-api/org/springframework/test/context/junit/jupiter/SpringExtension.html), so this project keeps Boot's managed JUnit Jupiter 6.0.3. The tests use the familiar Jupiter annotations and Mockito. H2 and Testcontainers are test-only dependencies; the runtime database remains MySQL.
+Implementation references: [Stripe Java SDK](https://github.com/stripe/stripe-java), [PaymentIntent creation](https://docs.stripe.com/api/payment_intents/create?lang=java), [refunds](https://docs.stripe.com/api/refunds/create?lang=java), [webhook signature verification](https://docs.stripe.com/events/manage-webhook-endpoints#signature-errors).
