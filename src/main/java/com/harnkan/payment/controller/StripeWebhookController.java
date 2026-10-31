@@ -52,7 +52,7 @@ public class StripeWebhookController {
         String reference = event.path("data").path("object").path("id").asText("");
         if (!reference.startsWith("pi_") || reference.length() > 255) throw new InvalidStripeWebhookException();
         try {
-            // Commits state + a durable Deal-delivery row, but never waits for Deal inside the webhook.
+            // Payment commits its state before notifying Deal; a Deal outage does not fail this webhook.
             service.handleStripeResult(reference, "payment_intent.succeeded".equals(type));
         } catch (PaymentNotFoundException unrelatedPayment) {
             // CLI listeners can forward other PaymentIntents belonging to this Stripe sandbox.

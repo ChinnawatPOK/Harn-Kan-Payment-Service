@@ -34,13 +34,12 @@ grpc:
     port: 9091
 
 payment:
+  cors:
+    origins: ${PAYMENT_CORS_ORIGINS:}
   dev:
     enabled: ${PAYMENT_DEV_ENABLED:false}
   deal:
     target: ${DEAL_GRPC_TARGET:localhost:9090}
-  delivery:
-    enabled: ${PAYMENT_DELIVERY_ENABLED:true}
-    retry-ms: 5000
   gateway-mode: ${PAYMENT_GATEWAY_MODE:fake}
   jwt-secret: ${PAYMENT_JWT_SECRET:9768318c34e318158c87bfb9004a71fbcb9badb1056f74b011d485e27bb4e9a8}
   stripe:

@@ -39,11 +39,6 @@ public class PaymentRepository {
         return withLock("harnkan-payment:", dealId, action);
     }
 
-    /** Independent lock namespace: callbacks never block Deal-initiated payment mutations. */
-    public <T> T withDeliveryLock(String paymentId, Supplier<T> action) {
-        return withLock("harnkan-delivery:", paymentId, action);
-    }
-
     private <T> T withLock(String prefix, String dealId, Supplier<T> action) {
         if (lockedTemplate.get() != null) {
             throw new IllegalStateException("Nested payment locks are not supported");
@@ -134,50 +129,6 @@ public class PaymentRepository {
                 """, refundGatewayRef, LocalDateTime.now(ZoneOffset.UTC), paymentId);
     }
 
-    /** Atomic database-only work on the connection holding the deal advisory lock. */
-    public <T> T atomic(Supplier<T> action) {
-        if (lockedTemplate.get() == null) throw new IllegalStateException("Deal lock required");
-        return jdbc().execute((ConnectionCallback<T>) connection -> {
-            connection.setAutoCommit(false);
-            try {
-                T result = action.get();
-                connection.commit();
-                return result;
-            } catch (java.sql.SQLException | RuntimeException | Error failure) {
-                connection.rollback();
-                throw failure;
-            } finally {
-                connection.setAutoCommit(true);
-            }
-        });
-    }
-
-    public void enqueueDealUpdate(String paymentId, String status) {
-        jdbc().update("DELETE FROM payment_deal_updates WHERE payment_id = ?", paymentId);
-        jdbc().update("INSERT INTO payment_deal_updates (payment_id, status) VALUES (?, ?)", paymentId, status);
-    }
-
-    public record DealUpdate(String paymentId, String status) {}
-
-    public List<DealUpdate> pendingDealUpdates() {
-        return jdbc().query("SELECT payment_id, status FROM payment_deal_updates LIMIT 100",
-                (rs, row) -> new DealUpdate(rs.getString(1), rs.getString(2)));
-    }
-
-    public Optional<DealUpdate> pendingDealUpdate(String paymentId) {
-        return jdbc().query("SELECT payment_id, status FROM payment_deal_updates WHERE payment_id = ?",
-                (rs, row) -> new DealUpdate(rs.getString(1), rs.getString(2)), paymentId).stream().findFirst();
-    }
-
-    public void clearDealUpdate(String paymentId) {
-        jdbc().update("DELETE FROM payment_deal_updates WHERE payment_id = ?", paymentId);
-    }
-
-    public void acknowledgeDealUpdate(DealUpdate update) {
-        jdbc().update("DELETE FROM payment_deal_updates WHERE payment_id = ? AND status = ?",
-                update.paymentId(), update.status());
-    }
-
     public void confirmReceipt(String paymentId) {
         jdbc().update("UPDATE payments SET is_confirmed_receipt = TRUE, updated_at = ? WHERE id = ?",
                 LocalDateTime.now(ZoneOffset.UTC), paymentId);
@@ -188,35 +139,6 @@ public class PaymentRepository {
                 UPDATE payments SET status = 'RELEASED', payout_gateway_ref = ?, updated_at = ?
                 WHERE id = ? AND status = 'PAYOUT_PENDING'
                 """, reference, LocalDateTime.now(ZoneOffset.UTC), paymentId);
-    }
-
-    public Optional<String> payoutCreator(String dealId) {
-        return jdbc().query("SELECT creator_id FROM payment_payouts WHERE deal_id = ?",
-                (rs, row) -> rs.getString(1), dealId).stream().findFirst();
-    }
-
-    public void bindPayoutCreator(String dealId, String creatorId) {
-        jdbc().update("INSERT INTO payment_payouts (deal_id, creator_id) VALUES (?, ?)", dealId, creatorId);
-    }
-
-    public record PendingEvent(String eventId, String routingKey, String payload) {}
-
-    public void enqueueEvent(String eventId, String routingKey, String payload) {
-        Integer count = jdbc().queryForObject("SELECT COUNT(*) FROM payment_events WHERE event_id = ?",
-                Integer.class, eventId);
-        if (count != null && count == 0) {
-            jdbc().update("INSERT INTO payment_events (event_id, routing_key, payload) VALUES (?, ?, ?)",
-                    eventId, routingKey, payload);
-        }
-    }
-
-    public List<PendingEvent> pendingEvents() {
-        return jdbc().query("SELECT event_id, routing_key, payload FROM payment_events WHERE delivered = FALSE LIMIT 100",
-                (rs, row) -> new PendingEvent(rs.getString(1), rs.getString(2), rs.getString(3)));
-    }
-
-    public void acknowledgeEvent(String eventId) {
-        jdbc().update("UPDATE payment_events SET delivered = TRUE WHERE event_id = ?", eventId);
     }
 
 }

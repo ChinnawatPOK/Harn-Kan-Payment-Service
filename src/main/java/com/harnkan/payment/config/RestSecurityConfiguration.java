@@ -24,7 +24,7 @@ import org.springframework.security.web.SecurityFilterChain;
 public class RestSecurityConfiguration {
     @Bean
     SecurityFilterChain restSecurityFilterChain(HttpSecurity http) throws Exception {
-        http.csrf(csrf -> csrf.disable())
+        http.cors(Customizer.withDefaults()).csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/webhooks/stripe").permitAll()
@@ -44,6 +44,20 @@ public class RestSecurityConfiguration {
                                     + java.time.Instant.now() + "\"}");
                         }));
         return http.build();
+    }
+
+    @Bean
+    org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource(
+            @Value("${payment.cors.origins:}") String origins) {
+        var config = new org.springframework.web.cors.CorsConfiguration();
+        config.setAllowedOrigins(java.util.Arrays.stream(origins.split(","))
+                .map(String::trim).filter(value -> !value.isEmpty()).toList());
+        config.setAllowedMethods(java.util.List.of("GET", "POST", "OPTIONS"));
+        config.setAllowedHeaders(java.util.List.of("Authorization", "Content-Type", "Accept"));
+        config.setMaxAge(3600L);
+        var source = new org.springframework.web.cors.UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
     }
 
     @Bean

@@ -6,6 +6,7 @@ import com.harnkan.payment.gateway.PaymentGateway;
 import com.harnkan.payment.gateway.GatewayPaymentState;
 import com.harnkan.payment.gateway.StartPaymentResult;
 import com.harnkan.payment.model.Payment;
+import com.harnkan.payment.messaging.PaymentEventPublisher;
 import com.harnkan.payment.repository.PaymentRepository;
 import com.harnkan.payment.util.IdGenerator;
 import java.math.BigDecimal;
@@ -30,13 +31,15 @@ public class PaymentService {
     private final PaymentGateway gateway;
     private final Clock clock;
     private final PaymentDealNotifier notifier;
+    private final PaymentEventPublisher events;
     private final JsonMapper json = new JsonMapper();
 
-    public PaymentService(PaymentRepository repository, PaymentGateway gateway, Clock clock, PaymentDealNotifier notifier) {
+    public PaymentService(PaymentRepository repository, PaymentGateway gateway, Clock clock, PaymentDealNotifier notifier, PaymentEventPublisher events) {
         this.repository = repository;
         this.gateway = gateway;
         this.clock = clock;
         this.notifier = notifier;
+        this.events = events;
     }
 
     public Payment createPayment(String dealId, String participantId, BigDecimal amount) {
@@ -68,23 +71,19 @@ public class PaymentService {
                 Payment payment = getOwnedPayment(paymentId, userId);
                 if (!"RESERVED".equals(payment.getStatus())) throw new InvalidPaymentStateException();
                 if (payment.getReservedUntil() == null || !LocalDateTime.now(clock).isBefore(payment.getReservedUntil())) {
-                    changeAndNotify(paymentId, "FAILED");
+                    repository.updateStatus(paymentId, "FAILED");
                     throw new PaymentExpiredException();
                 }
                 StartPaymentResult result = gateway.startPayment(paymentId, payment.getAmount());
                 if (result == null || !validReference(result.gatewayReference()) || result.clientSecret() == null
                         || result.clientSecret().isBlank()) throw new PaymentGatewayException();
-                repository.atomic(() -> {
-                    if (repository.updatePaymentStarted(paymentId, result.gatewayReference(), "PAYMENT_PENDING") != 1)
-                        throw new InvalidPaymentStateException();
-                    repository.enqueueDealUpdate(paymentId, "PAYMENT_PENDING");
-                    return null;
-                });
+                if (repository.updatePaymentStarted(paymentId, result.gatewayReference(), "PAYMENT_PENDING") != 1)
+                    throw new InvalidPaymentStateException();
                 return result;
             });
         } finally {
             // Never call Deal with a payment lock held, including the expired-payment path.
-            notifier.notifyPending(paymentId);
+            notifier.notifyCurrent(paymentId);
         }
     }
 
@@ -106,6 +105,7 @@ public class PaymentService {
                         && payment.getUpdatedAt().isBefore(LocalDateTime.now(clock).minusMinutes(10)))) {
             reconcilePayment(paymentId);
         }
+        notifier.notifyCurrent(paymentId);
         return getOwnedPayment(paymentId, userId);
     }
 
@@ -128,15 +128,11 @@ public class PaymentService {
         return repository.withDealLock(initial.getDealId(), () -> {
             Payment payment = getPayment(paymentId);
             switch (payment.getStatus()) {
-                case "RESERVED", "PAYMENT_PENDING" -> repository.atomic(() -> {
-                    repository.updateStatus(paymentId, "FAILED");
-                    repository.clearDealUpdate(paymentId);
-                    return null;
-                });
+                case "RESERVED", "PAYMENT_PENDING" -> repository.updateStatus(paymentId, "FAILED");
                 case "FAILED" -> { /* Idempotent retry. */ }
                 default -> throw new InvalidPaymentStateException();
             }
-            // Deal initiated this RPC: only return state, never enqueue a callback.
+            // Deal initiated this RPC: only return state, never call Deal back.
             return getPayment(paymentId);
         });
     }
@@ -152,13 +148,8 @@ public class PaymentService {
             int refundedCount = 0;
             for (Payment payment : payments) {
                 switch (payment.getStatus()) {
-                    case "RESERVED", "PAYMENT_PENDING" -> repository.atomic(() -> {
-                        repository.updateStatus(payment.getId(), "FAILED");
-                        repository.clearDealUpdate(payment.getId());
-                        return null;
-                    });
+                    case "RESERVED", "PAYMENT_PENDING" -> repository.updateStatus(payment.getId(), "FAILED");
                     case "HELD", "REFUND_PENDING" -> {
-                        repository.clearDealUpdate(payment.getId());
                         if (refund(payment)) refundedCount++;
                     }
                     default -> { /* Already FAILED or REFUNDED. */ }
@@ -175,15 +166,13 @@ public class PaymentService {
             if (!validReference(payment.getPaymentGatewayRef())) throw new PaymentGatewayException();
             var result = gateway.refund(payment.getPaymentGatewayRef(), payment.getAmount());
             if (result == null || !validReference(result.gatewayReference())) throw new PaymentGatewayException();
-            return repository.atomic(() -> {
-                int changed = repository.markRefunded(payment.getId(), result.gatewayReference());
-                if (changed == 1) {
-                    enqueueEvent("payment.refunded:" + payment.getId(), "payment.refunded", Map.of(
-                            "dealId", payment.getDealId(), "paymentId", payment.getId(),
-                            "participantId", payment.getParticipantId(), "amount", payment.getAmount().toPlainString()));
-                }
-                return changed == 1;
-            });
+            int changed = repository.markRefunded(payment.getId(), result.gatewayReference());
+            if (changed == 1) {
+                publishEvent("payment.refunded:" + payment.getId(), "payment.refunded", Map.of(
+                        "dealId", payment.getDealId(), "paymentId", payment.getId(),
+                        "participantId", payment.getParticipantId(), "amount", payment.getAmount().toPlainString()));
+            }
+            return changed == 1;
         } catch (PaymentGatewayException failure) {
             log.warn("REFUND_PENDING paymentId={}", payment.getId());
             return false;
@@ -201,11 +190,7 @@ public class PaymentService {
                         && List.of("PAYOUT_PENDING", "RELEASED").contains(payment.getStatus())) return payment;
                 throw new InvalidPaymentStateException();
             }
-            repository.atomic(() -> {
-                repository.confirmReceipt(paymentId);
-                repository.clearDealUpdate(paymentId);
-                return null;
-            });
+            repository.confirmReceipt(paymentId);
             return getPayment(paymentId);
         });
     }
@@ -221,9 +206,7 @@ public class PaymentService {
             if (eligible.isEmpty() || eligible.stream().anyMatch(p ->
                     !List.of("HELD", "PAYOUT_PENDING", "RELEASED").contains(p.getStatus())
                             || !Boolean.TRUE.equals(p.getConfirmedReceipt()))) throw new InvalidPaymentStateException();
-            var boundCreator = repository.payoutCreator(dealId);
-            if (boundCreator.isPresent() && !boundCreator.get().equals(creatorId)) throw new InvalidPaymentStateException();
-            if (boundCreator.isEmpty()) repository.bindPayoutCreator(dealId, creatorId);
+            int newlyReleased = 0;
             for (Payment payment : eligible) {
                 if ("RELEASED".equals(payment.getStatus())) continue;
                 repository.updateStatus(payment.getId(), "PAYOUT_PENDING");
@@ -231,6 +214,7 @@ public class PaymentService {
                     var result = gateway.payout(creatorId, payment.getAmount(), payment.getId());
                     if (result == null || !validReference(result.gatewayReference())) throw new PaymentGatewayException();
                     repository.markReleased(payment.getId(), result.gatewayReference());
+                    newlyReleased++;
                 } catch (PaymentGatewayException failure) {
                     // Keep progress and allow the Deal scheduler to retry with the same gateway identity.
                     log.warn("PAYOUT_PENDING paymentId={}", payment.getId());
@@ -239,8 +223,8 @@ public class PaymentService {
             List<Payment> current = repository.findByDealId(dealId);
             var released = current.stream().filter(p -> "RELEASED".equals(p.getStatus())).toList();
             BigDecimal total = released.stream().map(Payment::getAmount).reduce(new BigDecimal("0.00"), BigDecimal::add);
-            if (released.size() == eligible.size()) {
-                enqueueEvent("payout.released:" + dealId, "payout.released", Map.of(
+            if (newlyReleased > 0 && released.size() == eligible.size()) {
+                publishEvent("payout.released:" + dealId, "payout.released", Map.of(
                         "dealId", dealId, "creatorId", creatorId, "totalAmount", total.toPlainString()));
             }
             return new ReleaseOutcome(released.size(), total, current);
@@ -251,52 +235,50 @@ public class PaymentService {
         Payment initial = getPayment(paymentId);
         repository.withDealLock(initial.getDealId(), () -> {
             Payment payment = getPayment(paymentId);
-            if ("PAYMENT_PENDING".equals(payment.getStatus())) changeAndNotify(paymentId, "HELD");
+            if ("PAYMENT_PENDING".equals(payment.getStatus())) repository.updateStatus(paymentId, "HELD");
             else if (!"HELD".equals(payment.getStatus())) throw new InvalidPaymentStateException();
             return null;
         });
-        notifier.notifyPending(paymentId);
+        notifier.notifyCurrent(paymentId);
         return getPayment(paymentId);
     }
 
     public void handlePaymentSucceeded(String gatewayReference) {
-        handleGatewayResult(gatewayReference, true, true);
+        handleGatewayResult(gatewayReference, true);
     }
 
     public void handlePaymentFailed(String gatewayReference) {
-        handleGatewayResult(gatewayReference, false, true);
+        handleGatewayResult(gatewayReference, false);
     }
 
     public void handleStripeResult(String reference, boolean success) {
-        handleGatewayResult(reference, success, false);
+        handleGatewayResult(reference, success);
     }
 
-    private void handleGatewayResult(String reference, boolean success, boolean notifyImmediately) {
+    private void handleGatewayResult(String reference, boolean success) {
         if (!validReference(reference)) throw new IllegalArgumentException("Invalid gateway reference");
         Payment initial = repository.findByGatewayReference(reference).orElseThrow(PaymentNotFoundException::new);
         repository.withDealLock(initial.getDealId(), () -> {
             Payment payment = getPayment(initial.getId());
-            if ("PAYMENT_PENDING".equals(payment.getStatus())) changeAndNotify(payment.getId(), success ? "HELD" : "FAILED");
+            if ("PAYMENT_PENDING".equals(payment.getStatus())) repository.updateStatus(payment.getId(), success ? "HELD" : "FAILED");
             else if (success && List.of("FAILED", "REFUND_PENDING").contains(payment.getStatus())) refund(payment);
             return null;
         });
-        if (notifyImmediately) notifier.notifyPending(initial.getId());
+        notifier.notifyCurrent(initial.getId());
     }
 
-    private void changeAndNotify(String paymentId, String status) {
-        repository.atomic(() -> {
-            repository.updateStatus(paymentId, status);
-            repository.enqueueDealUpdate(paymentId, status);
-            return null;
-        });
-    }
-
-    private void enqueueEvent(String id, String type, Map<String, String> fields) {
+    private void publishEvent(String id, String type, Map<String, String> fields) {
         Map<String, String> payload = new LinkedHashMap<>(fields);
         payload.put("eventId", id);
         payload.put("eventType", type);
         payload.put("occurredAt", clock.instant().truncatedTo(ChronoUnit.SECONDS).toString());
-        repository.enqueueEvent(id, type, json.writeValueAsString(payload));
+        try {
+            events.publish(new PaymentEventPublisher.PaymentEvent(id, type, json.writeValueAsString(payload)));
+        } catch (Exception failure) {
+            if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+            // RabbitMQ is best-effort here: completed payment operations must not be rolled back.
+            log.warn("PAYMENT_EVENT_FAILED eventId={} type={}", id, failure.getClass().getSimpleName());
+        }
     }
 
     private static boolean validReference(String reference) {

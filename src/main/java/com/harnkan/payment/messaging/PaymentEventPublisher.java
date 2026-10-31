@@ -1,6 +1,5 @@
 package com.harnkan.payment.messaging;
 
-import com.harnkan.payment.repository.PaymentRepository.PendingEvent;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import org.springframework.amqp.core.Message;
@@ -15,6 +14,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class PaymentEventPublisher {
+    public record PaymentEvent(String eventId, String routingKey, String payload) {}
+
     public static final String EXCHANGE = "harnkan.events";
     private final RabbitTemplate rabbit;
 
@@ -22,7 +23,7 @@ public class PaymentEventPublisher {
         this.rabbit = rabbit;
     }
 
-    public void publish(PendingEvent event) throws Exception {
+    public void publish(PaymentEvent event) throws Exception {
         MessageProperties properties = new MessageProperties();
         properties.setContentType(MessageProperties.CONTENT_TYPE_JSON);
         properties.setMessageId(event.eventId());
