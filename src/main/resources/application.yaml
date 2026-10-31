@@ -17,15 +17,21 @@ spring:
     baseline-version: 0
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8082}
 
 grpc:
   server:
-    port: 9091
+    port: ${GRPC_SERVER_PORT:9091}
 
 payment:
   gateway-mode: ${PAYMENT_GATEWAY_MODE:fake}
-  jwt-secret: 9768318c34e318158c87bfb9004a71fbcb9badb1056f74b011d485e27bb4e9a8
   stripe:
     secret-key: ${STRIPE_SECRET_KEY:}
     webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+
+deal:
+  service:
+    host: ${DEAL_SERVICE_HOST:localhost}
+    port: ${DEAL_SERVICE_PORT:9090}
+  callback:
+    enabled: ${DEAL_CALLBACK_ENABLED:true}

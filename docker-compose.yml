@@ -5,9 +5,12 @@ services:
     container_name: harnkan-payment-service
     restart: unless-stopped
     ports:
-      - "8080:8080"   # Payment REST API
-      - "9091:9091"   # Payment gRPC: CreatePayment, RefundDeal
+      - "8082:8082"   # Payment REST API (the gateway routes /api/payments/** here)
+      - "9091:9091"   # Payment gRPC: CreatePayment, CancelPayment, RefundDeal
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://host.docker.internal:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
+      # Payment calls Deal's gRPC (DG5 UpdateParticipantPayment) when a payment changes by its own doing.
+      DEAL_SERVICE_HOST: ${DEAL_SERVICE_HOST:-host.docker.internal}
+      DEAL_SERVICE_PORT: ${DEAL_SERVICE_PORT:-9090}
     extra_hosts:
       - "host.docker.internal:host-gateway"
