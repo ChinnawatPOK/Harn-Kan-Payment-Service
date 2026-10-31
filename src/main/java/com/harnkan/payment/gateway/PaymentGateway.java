@@ -6,6 +6,9 @@ import java.math.BigDecimal;
 public interface PaymentGateway {
     StartPaymentResult startPayment(String paymentId, BigDecimal amount);
     PayoutResult payout(String creatorId, BigDecimal amount, String reference);
+    default PayoutResult payout(String creatorId, BigDecimal amount, String reference, String paymentGatewayRef) {
+        return payout(creatorId, amount, reference);
+    }
     default GatewayPaymentState paymentState(String paymentGatewayRef) {
         return GatewayPaymentState.PENDING;
     }

@@ -211,7 +211,7 @@ public class PaymentService {
                 if ("RELEASED".equals(payment.getStatus())) continue;
                 repository.updateStatus(payment.getId(), "PAYOUT_PENDING");
                 try {
-                    var result = gateway.payout(creatorId, payment.getAmount(), payment.getId());
+                    var result = gateway.payout(creatorId, payment.getAmount(), payment.getId(), payment.getPaymentGatewayRef());
                     if (result == null || !validReference(result.gatewayReference())) throw new PaymentGatewayException();
                     repository.markReleased(payment.getId(), result.gatewayReference());
                     newlyReleased++;

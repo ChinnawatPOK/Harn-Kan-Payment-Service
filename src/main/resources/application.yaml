@@ -41,7 +41,8 @@ payment:
   deal:
     target: ${DEAL_GRPC_TARGET:localhost:9090}
   gateway-mode: ${PAYMENT_GATEWAY_MODE:fake}
-  jwt-secret: ${PAYMENT_JWT_SECRET:9768318c34e318158c87bfb9004a71fbcb9badb1056f74b011d485e27bb4e9a8}
   stripe:
+    payout-mode: ${STRIPE_PAYOUT_MODE:ledger}
+    sandbox-host-account-id: ${STRIPE_SANDBOX_HOST_ACCOUNT_ID:}
     secret-key: ${STRIPE_SECRET_KEY:}
     webhook-secret: ${STRIPE_WEBHOOK_SECRET:}

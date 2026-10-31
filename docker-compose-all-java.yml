@@ -1,6 +1,7 @@
 # Run from this repository:
 # docker compose -f docker-compose-all-java.yml up -d --build
 # Requires ../Harn-Kan-Deal-Service alongside this repository.
+# RabbitMQ runs externally; defaults to the host broker on port 5672.
 name: harnkan-all-java
 
 services:
@@ -13,15 +14,21 @@ services:
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
       PAYMENT_GATEWAY_MODE: ${PAYMENT_GATEWAY_MODE:-fake}
+      PAYMENT_CORS_ORIGINS: ${PAYMENT_CORS_ORIGINS:-}
       PAYMENT_DEV_ENABLED: ${PAYMENT_DEV_ENABLED:-false}
+      STRIPE_PAYOUT_MODE: ${STRIPE_PAYOUT_MODE:-ledger}
+      STRIPE_SANDBOX_HOST_ACCOUNT_ID: ${STRIPE_SANDBOX_HOST_ACCOUNT_ID:-}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       DEAL_GRPC_TARGET: deal-service:9090
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_USERNAME: harnkan
-      RABBITMQ_PASSWORD: harnkan
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-host.docker.internal}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-harnkan}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-harnkan}
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: password
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
@@ -30,7 +37,7 @@ services:
     build: ../Harn-Kan-Deal-Service
     restart: unless-stopped
     ports:
-      - "8081:8081" # REST API
+      - "${DEAL_REST_PORT:-8081}:8081" # REST API; override if Metro uses 8081
       - "9090:9090" # gRPC
     environment:
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/deals?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
@@ -38,14 +45,14 @@ services:
       SPRING_DATASOURCE_PASSWORD: password
       PAYMENT_SERVICE_HOST: payment-service
       PAYMENT_SERVICE_PORT: 9091
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: harnkan
-      RABBITMQ_PASSWORD: harnkan
+      RABBITMQ_HOST: ${RABBITMQ_HOST:-host.docker.internal}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USER: ${RABBITMQ_USERNAME:-harnkan}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-harnkan}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
       payment-service:
         condition: service_started
@@ -68,23 +75,5 @@ services:
       timeout: 5s
       retries: 5
 
-  rabbitmq:
-    image: rabbitmq:4-management
-    restart: unless-stopped
-    hostname: harnkan-rabbitmq
-    ports:
-      - "5672:5672" # AMQP
-      - "15672:15672" # Management UI: harnkan / harnkan
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-      - ../Harn-Kan-Deal-Service/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-harnkan.conf:ro
-      - ../Harn-Kan-Deal-Service/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
 volumes:
   mysql_data:
-  rabbitmq_data:
