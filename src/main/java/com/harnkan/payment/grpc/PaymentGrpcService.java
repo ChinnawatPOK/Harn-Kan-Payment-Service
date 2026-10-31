@@ -4,10 +4,12 @@ import com.harnkan.contract.payment.*;
 import com.harnkan.payment.exception.*;
 import com.harnkan.payment.model.Payment;
 import com.harnkan.payment.service.PaymentService;
+import com.harnkan.payment.service.RefundOutcome;
+import com.harnkan.payment.service.ReleaseOutcome;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.math.BigDecimal;
-import java.time.format.DateTimeFormatter;
+import java.time.ZoneOffset;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,15 +35,63 @@ public class PaymentGrpcService extends PaymentServiceGrpc.PaymentServiceImplBas
             return CreatePaymentResponse.newBuilder()
                     .setPaymentId(payment.getId())
                     .setStatus(payment.getStatus())
-                    .setReservedUntil(payment.getReservedUntil().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))
+                    .setReservedUntil(payment.getReservedUntil().toInstant(ZoneOffset.UTC).toString())
                     .build();
         });
     }
 
     @Override
+    public void cancelPayment(CancelPaymentRequest request, StreamObserver<CancelPaymentResponse> observer) {
+        respond(observer, () -> {
+            Payment payment = service.cancelPayment(request.getPaymentId());
+            return CancelPaymentResponse.newBuilder().setPaymentId(payment.getId()).setStatus(payment.getStatus()).build();
+        });
+    }
+
+    @Override
     public void refundDeal(RefundDealRequest request, StreamObserver<RefundDealResponse> observer) {
-        respond(observer, () -> RefundDealResponse.newBuilder()
-                .setRefundedCount(service.refundDeal(request.getDealId())).build());
+        respond(observer, () -> {
+            RefundOutcome outcome = service.refundDeal(request.getDealId());
+            RefundDealResponse.Builder response = RefundDealResponse.newBuilder().setRefundedCount(outcome.refundedCount());
+            for (Payment payment : outcome.payments()) {
+                response.addPayments(statusItem(payment));
+            }
+            return response.build();
+        });
+    }
+
+    @Override
+    public void confirmReceipt(ConfirmReceiptRequest request, StreamObserver<ConfirmReceiptResponse> observer) {
+        respond(observer, () -> {
+            Payment payment = service.confirmReceipt(request.getPaymentId(), request.getParticipantId());
+            return ConfirmReceiptResponse.newBuilder()
+                    .setPaymentId(payment.getId())
+                    .setStatus(payment.getStatus())
+                    .setIsConfirmedReceipt(Boolean.TRUE.equals(payment.getConfirmedReceipt()))
+                    .build();
+        });
+    }
+
+    @Override
+    public void releaseFunds(ReleaseFundsRequest request, StreamObserver<ReleaseFundsResponse> observer) {
+        respond(observer, () -> {
+            ReleaseOutcome outcome = service.releaseFunds(request.getDealId(), request.getCreatorId());
+            ReleaseFundsResponse.Builder response = ReleaseFundsResponse.newBuilder()
+                    .setReleasedCount(outcome.releasedCount())
+                    .setTotalAmount(outcome.totalAmount().toPlainString());
+            for (Payment payment : outcome.payments()) {
+                response.addPayments(statusItem(payment));
+            }
+            return response.build();
+        });
+    }
+
+    private static PaymentStatusItem statusItem(Payment payment) {
+        return PaymentStatusItem.newBuilder()
+                .setPaymentId(payment.getId())
+                .setParticipantId(payment.getParticipantId())
+                .setStatus(payment.getStatus())
+                .build();
     }
 
     private <T> void respond(StreamObserver<T> observer, Supplier<T> action) {
@@ -61,6 +111,7 @@ public class PaymentGrpcService extends PaymentServiceGrpc.PaymentServiceImplBas
         if (exception instanceof IllegalArgumentException) status = Status.INVALID_ARGUMENT;
         else if (exception instanceof DuplicatePaymentException) status = Status.ALREADY_EXISTS;
         else if (exception instanceof PaymentNotFoundException) status = Status.NOT_FOUND;
+        else if (exception instanceof PaymentForbiddenException) status = Status.PERMISSION_DENIED;
         else if (exception instanceof InvalidPaymentStateException || exception instanceof PaymentExpiredException)
             status = Status.FAILED_PRECONDITION;
         else if (exception instanceof PaymentGatewayException || exception instanceof PaymentBusyException) status = Status.UNAVAILABLE;

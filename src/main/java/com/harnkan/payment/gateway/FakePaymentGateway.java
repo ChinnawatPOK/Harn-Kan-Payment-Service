@@ -14,4 +14,10 @@ public class FakePaymentGateway implements PaymentGateway {
     public RefundResult refund(String paymentGatewayRef, BigDecimal amount) {
         return new RefundResult("fake_refund_" + UUID.nameUUIDFromBytes(paymentGatewayRef.getBytes(StandardCharsets.UTF_8)));
     }
+
+    /** Simulated ledger: no money moves; the reference is deterministic so a retry gets the same one. */
+    @Override
+    public PayoutResult payout(String creatorId, BigDecimal amount, String reference) {
+        return new PayoutResult("fake_payout_" + UUID.nameUUIDFromBytes(reference.getBytes(StandardCharsets.UTF_8)));
+    }
 }

@@ -29,12 +29,6 @@ public class PaymentRepository {
         this.template = template;
     }
 
-    /**
-     * MySQL session lock serializes mutations for a deal across app instances, including
-     * the initial insert (there is deliberately no unique pair index in this phase).
-     * Reuse the SAME connection for SQL while locked. Statements remain autocommitted:
-     * REFUND_PENDING survives a gateway failure and no DB transaction spans the network.
-     */
     public <T> T withDealLock(String dealId, Supplier<T> action) {
         if (lockedTemplate.get() != null) {
             throw new IllegalStateException("Nested payment locks are not supported");
@@ -83,7 +77,7 @@ public class PaymentRepository {
     }
 
     public List<Payment> findByDealId(String dealId) {
-        return jdbc().query("SELECT " + COLUMNS + " FROM payments WHERE deal_id = ? ORDER BY id", mapper, dealId);
+        return jdbc().query("SELECT " + COLUMNS + " FROM payments WHERE deal_id = ? ORDER BY created_at, id", mapper, dealId);
     }
 
     public Optional<Payment> findByGatewayReference(String reference) {
@@ -108,6 +102,20 @@ public class PaymentRepository {
                 UPDATE payments SET payment_gateway_ref = ?, status = ?, updated_at = ?
                 WHERE id = ? AND status = 'RESERVED'
                 """, gatewayRef, newStatus, LocalDateTime.now(ZoneOffset.UTC), paymentId);
+    }
+
+    public int markConfirmedReceipt(String paymentId) {
+        return jdbc().update("""
+                UPDATE payments SET is_confirmed_receipt = TRUE, updated_at = ?
+                WHERE id = ? AND status = 'HELD'
+                """, LocalDateTime.now(ZoneOffset.UTC), paymentId);
+    }
+
+    public int markReleased(String paymentId, String payoutGatewayRef) {
+        return jdbc().update("""
+                UPDATE payments SET payout_gateway_ref = ?, status = 'RELEASED', updated_at = ?
+                WHERE id = ? AND status = 'PAYOUT_PENDING'
+                """, payoutGatewayRef, LocalDateTime.now(ZoneOffset.UTC), paymentId);
     }
 
     public int markRefunded(String paymentId, String refundGatewayRef) {
