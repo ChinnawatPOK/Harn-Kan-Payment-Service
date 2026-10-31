@@ -8,7 +8,13 @@ option java_outer_classname = "PaymentProto";
 
 service PaymentService {
   rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
+  // RESERVED / PAYMENT_PENDING -> FAILED (FAILED again is fine; other statuses -> FAILED_PRECONDITION)
+  rpc CancelPayment(CancelPaymentRequest) returns (CancelPaymentResponse);
   rpc RefundDeal(RefundDealRequest) returns (RefundDealResponse);
+  // HELD -> is_confirmed_receipt = true (repeating it is fine)
+  rpc ConfirmReceipt(ConfirmReceiptRequest) returns (ConfirmReceiptResponse);
+  // every HELD payment confirmed -> PAYOUT_PENDING -> payout to the host -> RELEASED
+  rpc ReleaseFunds(ReleaseFundsRequest) returns (ReleaseFundsResponse);
 }
 
 message CreatePaymentRequest {
@@ -23,10 +29,48 @@ message CreatePaymentResponse {
   string reserved_until = 3;
 }
 
+message CancelPaymentRequest {
+  string payment_id = 1;
+}
+
+message CancelPaymentResponse {
+  string payment_id = 1;
+  string status = 2;
+}
+
 message RefundDealRequest {
   string deal_id = 1;
 }
 
 message RefundDealResponse {
   int32 refunded_count = 1;
+  repeated PaymentStatusItem payments = 2;   // lets Deal update every participant in one call
+}
+
+message PaymentStatusItem {
+  string payment_id = 1;
+  string participant_id = 2;
+  string status = 3;    // FAILED | REFUND_PENDING | REFUNDED | RELEASED
+}
+
+message ConfirmReceiptRequest {
+  string payment_id = 1;
+  string participant_id = 2;   // must own the payment
+}
+
+message ConfirmReceiptResponse {
+  string payment_id = 1;
+  string status = 2;
+  bool is_confirmed_receipt = 3;
+}
+
+message ReleaseFundsRequest {
+  string deal_id = 1;
+  string creator_id = 2;       // the host who receives the payout
+}
+
+message ReleaseFundsResponse {
+  int32 released_count = 1;    // payments of the deal that are RELEASED (all of them, not only this call)
+  string total_amount = 2;     // sum of the RELEASED payments, decimal string e.g. "567.00"
+  repeated PaymentStatusItem payments = 3;
 }

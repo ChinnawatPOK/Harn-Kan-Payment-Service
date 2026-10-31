@@ -11,7 +11,6 @@ import org.springframework.context.annotation.Configuration;
 public class PaymentConfiguration {
     @Bean
     Clock paymentClock() {
-        // DATETIME and the proto carry no offset: all application timestamps use UTC.
         return Clock.systemUTC();
     }
 

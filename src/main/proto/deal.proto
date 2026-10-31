@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+// Client side of Deal Service's gRPC contract: only what Payment calls.
+// Keep the package, service, method and field numbers identical to Harn-Kan-Deal-Service/src/main/proto/deal.proto.
+package harnkan.deal;
+
+option java_package = "com.harnkan.contract.deal";
+option java_multiple_files = true;
+option java_outer_classname = "DealProto";
+
+service DealService {
+  // DG5: Payment tells Deal that a payment changed status.
+  rpc UpdateParticipantPayment(UpdateParticipantPaymentRequest) returns (UpdateParticipantPaymentResponse);
+}
+
+message UpdateParticipantPaymentRequest {
+  string deal_id = 1;
+  string participant_id = 2;
+  string payment_id = 3;
+  string status = 4;         // PAYMENT_PENDING | HELD | FAILED
+}
+
+message UpdateParticipantPaymentResponse {
+  string deal_status = 1;
+}
