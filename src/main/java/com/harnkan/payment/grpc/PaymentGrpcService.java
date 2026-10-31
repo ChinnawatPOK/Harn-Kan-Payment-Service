@@ -95,7 +95,7 @@ public class PaymentGrpcService extends PaymentServiceGrpc.PaymentServiceImplBas
         Status status;
         if (exception instanceof IllegalArgumentException) status = Status.INVALID_ARGUMENT;
         else if (exception instanceof DuplicatePaymentException) status = Status.ALREADY_EXISTS;
-        else if (exception instanceof org.springframework.security.access.AccessDeniedException) status = Status.PERMISSION_DENIED;
+        else if (exception instanceof PaymentAccessDeniedException) status = Status.PERMISSION_DENIED;
         else if (exception instanceof PaymentNotFoundException) status = Status.NOT_FOUND;
         else if (exception instanceof InvalidPaymentStateException || exception instanceof PaymentExpiredException)
             status = Status.FAILED_PRECONDITION;

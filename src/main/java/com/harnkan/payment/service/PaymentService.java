@@ -19,7 +19,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -93,13 +92,14 @@ public class PaymentService {
     }
 
     public Payment getOwnedPayment(String paymentId, String userId) {
+        if (userId == null || userId.isBlank()) throw new MissingUserIdException();
         Payment payment = getPayment(paymentId);
-        if (!payment.getParticipantId().equals(userId)) throw new AccessDeniedException("Payment belongs to another user");
+        if (!payment.getParticipantId().equals(userId)) throw new PaymentAccessDeniedException("Payment belongs to another user");
         return payment;
     }
 
     public Payment readOwnedPayment(String paymentId, String userId) {
-        Payment payment = getOwnedPayment(paymentId, userId); // Authorize before any provider request.
+        Payment payment = getOwnedPayment(paymentId, userId); // Check caller ownership before any provider request.
         if ("REFUND_PENDING".equals(payment.getStatus()) ||
                 (List.of("PAYMENT_PENDING", "FAILED").contains(payment.getStatus())
                         && payment.getUpdatedAt().isBefore(LocalDateTime.now(clock).minusMinutes(10)))) {
@@ -184,7 +184,7 @@ public class PaymentService {
         Payment initial = getPayment(paymentId);
         return repository.withDealLock(initial.getDealId(), () -> {
             Payment payment = getPayment(paymentId);
-            if (!payment.getParticipantId().equals(participantId)) throw new AccessDeniedException("Participant does not own payment");
+            if (!payment.getParticipantId().equals(participantId)) throw new PaymentAccessDeniedException("Participant does not own payment");
             if (!"HELD".equals(payment.getStatus())) {
                 if (Boolean.TRUE.equals(payment.getConfirmedReceipt())
                         && List.of("PAYOUT_PENDING", "RELEASED").contains(payment.getStatus())) return payment;

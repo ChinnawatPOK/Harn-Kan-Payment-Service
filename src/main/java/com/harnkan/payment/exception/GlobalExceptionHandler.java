@@ -13,8 +13,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
     public record ErrorBody(String code, String message, java.time.Instant timestamp) {}
 
-    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
-    ResponseEntity<ErrorBody> forbidden(org.springframework.security.access.AccessDeniedException exception) {
+    @ExceptionHandler(MissingUserIdException.class)
+    ResponseEntity<ErrorBody> missingUser(MissingUserIdException exception) {
+        return error(HttpStatus.UNAUTHORIZED, "USER_ID_REQUIRED", exception.getMessage());
+    }
+
+    @ExceptionHandler(PaymentAccessDeniedException.class)
+    ResponseEntity<ErrorBody> forbidden(PaymentAccessDeniedException exception) {
         return error(HttpStatus.FORBIDDEN, "FORBIDDEN", exception.getMessage());
     }
 
