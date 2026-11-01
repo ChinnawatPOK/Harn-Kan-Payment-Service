@@ -99,4 +99,12 @@ public class StripePaymentGateway implements PaymentGateway {
         if (transfers == null) throw new PaymentGatewayException();
         return new PayoutResult(transfers.transfer(reference, creatorId, paymentGatewayRef, amount).transferId());
     }
+    @Override
+    public PayoutResult payoutDeal(String dealId, String creatorId, java.util.List<PayoutPayment> payments,
+            boolean allowCreate) {
+        if (ledgerPayout) return PaymentGateway.super.payoutDeal(dealId, creatorId, payments, allowCreate);
+        if (transfers == null) throw new PaymentGatewayException();
+        return new PayoutResult(transfers.transferDeal(dealId, creatorId, payments, allowCreate).transferId());
+    }
+
 }

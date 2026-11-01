@@ -1,23 +1,21 @@
 package com.harnkan.payment.controller;
 
-import com.harnkan.payment.gateway.StripeTransferService;
-import java.math.BigDecimal;
+import com.harnkan.payment.service.DealPayoutService;
+import com.harnkan.payment.service.ReleaseOutcome;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.*;
 
-/** Direct provider test only: does not change deal/payment rows or enforce receipt confirmation. */
+/** Explicit sandbox test entry point using the same receipt checks and persistence as ReleaseFunds. */
 @RestController
 @RequestMapping("/internal/dev/stripe/transfers")
 @ConditionalOnProperty(name = "payment.stripe.test-transfer-enabled", havingValue = "true")
 public class StripeTestTransferController {
-    private final StripeTransferService transfers;
-
-    public StripeTestTransferController(StripeTransferService transfers) { this.transfers = transfers; }
-
-    public record Request(String reference, String creatorId, String paymentIntentId, BigDecimal amount) {}
+    private final DealPayoutService payouts;
+    public StripeTestTransferController(DealPayoutService payouts) { this.payouts = payouts; }
+    public record DealRequest(String dealId, String creatorId) {}
 
     @PostMapping
-    public StripeTransferService.Result transfer(@RequestBody Request request) {
-        return transfers.transfer(request.reference(), request.creatorId(), request.paymentIntentId(), request.amount());
+    public ReleaseOutcome releaseDeal(@RequestBody DealRequest request) {
+        return payouts.releaseFunds(request.dealId(), request.creatorId());
     }
 }

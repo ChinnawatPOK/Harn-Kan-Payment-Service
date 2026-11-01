@@ -15,6 +15,7 @@ public class Payment {
     private String paymentGatewayRef;
     private String refundGatewayRef;
     private String payoutGatewayRef;
+    private String paymentTransferGatewayRef;
     private String status;
     private LocalDateTime reservedUntil;
     private Boolean confirmedReceipt;

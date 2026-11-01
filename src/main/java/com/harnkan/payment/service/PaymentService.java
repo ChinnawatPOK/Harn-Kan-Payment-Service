@@ -41,6 +41,9 @@ public class PaymentService {
         BigDecimal validatedAmount = validateAmount(amount);
         log.info("PAYMENT_CREATE_REQUEST dealId={} participantId={}", dealId, participantId);
         return repository.withDealLock(dealId, () -> {
+            if (repository.findByDealId(dealId).stream().anyMatch(p ->
+                    java.util.List.of("PAYOUT_PENDING", "RELEASED").contains(p.getStatus())))
+                throw new InvalidPaymentStateException("Deal payout has already started");
             if (repository.existsActivePayment(dealId, participantId)) {
                 throw new DuplicatePaymentException();
             }
@@ -150,6 +153,9 @@ public class PaymentService {
         validateDealId(dealId);
         log.info("REFUND_DEAL_REQUEST dealId={}", dealId);
         return repository.withDealLock(dealId, () -> {
+            if (repository.findByDealId(dealId).stream().anyMatch(p ->
+                    java.util.List.of("PAYOUT_PENDING", "RELEASED").contains(p.getStatus())))
+                throw new InvalidPaymentStateException("Cannot refund after deal payout has started");
             int refundedCount = 0;
             boolean gatewayFailed = false;
             for (Payment payment : repository.findByDealId(dealId)) {
@@ -217,49 +223,9 @@ public class PaymentService {
         });
     }
 
-    /**
-     * PG3: pays every HELD payment of the deal to the host (simulated ledger in fake mode). All of them must be
-     * confirmed first. PAYOUT_PENDING is saved before the gateway call, so a failed payout is retried by calling
-     * again; RELEASED rows are skipped, so repeating it answers the same totals.
-     */
+    /** PG3: one aggregate transfer for the deal, using payment_transfer_gateway_ref columns. */
     public ReleaseOutcome releaseFunds(String dealId, String creatorId) {
-        validateDealId(dealId);
-        if (creatorId == null || !creatorId.matches("[A-Za-z0-9_-]{1,64}")) {
-            throw new IllegalArgumentException("creatorId must contain 1-64 letters, digits, underscores or hyphens");
-        }
-        log.info("RELEASE_FUNDS_REQUEST dealId={}", dealId);
-        return repository.withDealLock(dealId, () -> {
-            List<Payment> rows = repository.findByDealId(dealId);
-            if (rows.stream().anyMatch(p -> "HELD".equals(p.getStatus()) && !Boolean.TRUE.equals(p.getConfirmedReceipt()))) {
-                throw new InvalidPaymentStateException("Every paid payment must have its receipt confirmed before release");
-            }
-            boolean gatewayFailed = false;
-            for (Payment payment : rows) {
-                if (!"HELD".equals(payment.getStatus()) && !"PAYOUT_PENDING".equals(payment.getStatus())) {
-                    continue; // FAILED, REFUNDED and already RELEASED rows need nothing
-                }
-                repository.updateStatus(payment.getId(), "PAYOUT_PENDING");
-                try {
-                    PayoutResult result = gateway.payout(creatorId, payment.getAmount(), payment.getId(), payment.getPaymentGatewayRef());
-                    if (result == null || !validReference(result.gatewayReference())) {
-                        throw new PaymentGatewayException();
-                    }
-                    repository.markReleased(payment.getId(), result.gatewayReference());
-                    log.info("PAYOUT_RELEASED paymentId={} dealId={}", payment.getId(), dealId);
-                } catch (PaymentGatewayException exception) {
-                    gatewayFailed = true;
-                    log.warn("PAYOUT_FAILED paymentId={} dealId={}", payment.getId(), dealId);
-                }
-            }
-            if (gatewayFailed) {
-                throw new PaymentGatewayException();
-            }
-            List<Payment> after = repository.findByDealId(dealId);
-            List<Payment> released = after.stream().filter(p -> "RELEASED".equals(p.getStatus())).toList();
-            BigDecimal total = released.stream().map(Payment::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add)
-                    .setScale(2, RoundingMode.UNNECESSARY);
-            return new ReleaseOutcome(released.size(), total, after);
-        });
+        return new DealPayoutService(repository, gateway).releaseFunds(dealId, creatorId);
     }
 
     public void handlePaymentSucceeded(String gatewayReference) {

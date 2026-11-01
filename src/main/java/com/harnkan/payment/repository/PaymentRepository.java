@@ -19,7 +19,7 @@ import org.springframework.stereotype.Repository;
 public class PaymentRepository {
     private static final String COLUMNS = """
             id, deal_id, participant_id, amount, payment_gateway_ref, refund_gateway_ref,
-            payout_gateway_ref, status, reserved_until, is_confirmed_receipt, created_at, updated_at
+            payout_gateway_ref, payment_transfer_gateway_ref, status, reserved_until, is_confirmed_receipt, created_at, updated_at
             """;
     private final JdbcTemplate template;
     private final PaymentRowMapper mapper = new PaymentRowMapper();
@@ -65,9 +65,9 @@ public class PaymentRepository {
     }
 
     public void insert(Payment payment) {
-        jdbc().update("INSERT INTO payments (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        jdbc().update("INSERT INTO payments (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 payment.getId(), payment.getDealId(), payment.getParticipantId(), payment.getAmount(),
-                payment.getPaymentGatewayRef(), payment.getRefundGatewayRef(), payment.getPayoutGatewayRef(),
+                payment.getPaymentGatewayRef(), payment.getRefundGatewayRef(), payment.getPayoutGatewayRef(), payment.getPaymentTransferGatewayRef(),
                 payment.getStatus(), payment.getReservedUntil(), payment.getConfirmedReceipt(),
                 payment.getCreatedAt(), payment.getUpdatedAt());
     }
@@ -88,7 +88,7 @@ public class PaymentRepository {
     public boolean existsActivePayment(String dealId, String participantId) {
         Integer count = jdbc().queryForObject("""
                 SELECT COUNT(*) FROM payments WHERE deal_id = ? AND participant_id = ?
-                AND status IN ('RESERVED', 'PAYMENT_PENDING', 'HELD', 'REFUND_PENDING')
+                AND status IN ('RESERVED', 'PAYMENT_PENDING', 'HELD', 'REFUND_PENDING', 'PAYOUT_PENDING', 'RELEASED')
                 """, Integer.class, dealId, participantId);
         return count != null && count > 0;
     }
@@ -111,11 +111,12 @@ public class PaymentRepository {
                 """, LocalDateTime.now(ZoneOffset.UTC), paymentId);
     }
 
-    public int markReleased(String paymentId, String payoutGatewayRef) {
+    public int markReleased(String paymentId, String paymentTransferGatewayRef) {
         return jdbc().update("""
-                UPDATE payments SET payout_gateway_ref = ?, status = 'RELEASED', updated_at = ?
+                UPDATE payments SET payment_transfer_gateway_ref = ?, status = 'RELEASED', updated_at = ?
                 WHERE id = ? AND status = 'PAYOUT_PENDING'
-                """, payoutGatewayRef, LocalDateTime.now(ZoneOffset.UTC), paymentId);
+                AND (payment_transfer_gateway_ref IS NULL OR payment_transfer_gateway_ref = ?)
+                """, paymentTransferGatewayRef, LocalDateTime.now(ZoneOffset.UTC), paymentId, paymentTransferGatewayRef);
     }
 
     public int markRefunded(String paymentId, String refundGatewayRef) {
@@ -124,4 +125,15 @@ public class PaymentRepository {
                 WHERE id = ? AND status = 'REFUND_PENDING'
                 """, refundGatewayRef, LocalDateTime.now(ZoneOffset.UTC), paymentId);
     }
+    /** Compatibility with the existing deployed receipt handler. */
+    public void confirmReceipt(String paymentId) { markConfirmedReceipt(paymentId); }
+
+    public List<String> paymentsToReconcile() {
+        return jdbc().queryForList("""
+                SELECT id FROM payments WHERE payment_gateway_ref IS NOT NULL AND
+                ((status = 'PAYMENT_PENDING' AND updated_at < UTC_TIMESTAMP() - INTERVAL 10 MINUTE)
+                OR status = 'REFUND_PENDING') ORDER BY updated_at LIMIT 100
+                """, String.class);
+    }
+
 }
