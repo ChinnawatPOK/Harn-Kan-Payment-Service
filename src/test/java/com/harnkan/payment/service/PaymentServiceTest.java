@@ -330,78 +330,18 @@ class PaymentServiceTest {
         assertThatThrownBy(() -> service.confirmReceipt(PAYMENT, "u1")).isInstanceOf(InvalidPaymentStateException.class);
     }
 
-    // ---- release funds (PG3) -------------------------------------------------------------------
-
-    private Payment row(String id, String status, boolean confirmed) {
-        Payment p = payment(status, "u-" + id);
-        p.setId(id.repeat(32).substring(0, 32));
-        p.setConfirmedReceipt(confirmed);
-        return p;
-    }
-
     @Test
-    void releaseFunds_paysEveryConfirmedHeldPaymentToTheHost_andSumsReleased() {
-        Payment a = row("a", "HELD", true);
-        Payment b = row("b", "HELD", true);
-        Payment left = row("c", "FAILED", false);
-        Payment aDone = row("a", "RELEASED", true);
-        Payment bDone = row("b", "RELEASED", true);
-        when(repository.findByDealId(DEAL)).thenReturn(List.of(a, b, left), List.of(aDone, bDone, left));
-        when(gateway.payout(eq("host-1"), any(), anyString()))
-                .thenAnswer(i -> new com.harnkan.payment.gateway.PayoutResult("payout-" + i.getArgument(2)));
-
-        ReleaseOutcome outcome = service.releaseFunds(DEAL, "host-1");
-
-        assertThat(outcome.releasedCount()).isEqualTo(2);
-        assertThat(outcome.totalAmount()).isEqualByComparingTo("380.00");
-        assertThat(outcome.totalAmount().scale()).isEqualTo(2);
-        assertThat(outcome.payments()).hasSize(3);
-        verify(repository).updateStatus(a.getId(), "PAYOUT_PENDING");
-        verify(repository).markReleased(a.getId(), "payout-" + a.getId());
-        verify(repository).markReleased(b.getId(), "payout-" + b.getId());
-        verify(gateway, never()).payout(anyString(), any(), eq(left.getId()));
-        verify(dealClient, never()).updateParticipantPayment(any(), anyString());
-    }
-
-    @Test
-    void releaseFunds_someoneHasNotConfirmed_isInvalidState_andPaysNothing() {
-        when(repository.findByDealId(DEAL)).thenReturn(List.of(row("a", "HELD", true), row("b", "HELD", false)));
-
-        assertThatThrownBy(() -> service.releaseFunds(DEAL, "host-1")).isInstanceOf(InvalidPaymentStateException.class);
-
-        verify(gateway, never()).payout(anyString(), any(), anyString());
-        verify(repository, never()).updateStatus(anyString(), anyString());
-    }
-
-    @Test
-    void releaseFunds_gatewayFailure_leavesPayoutPending_soACallLaterRetriesIt() {
-        Payment a = row("a", "HELD", true);
-        when(repository.findByDealId(DEAL)).thenReturn(List.of(a));
-        when(gateway.payout(anyString(), any(), anyString())).thenThrow(new PaymentGatewayException());
-
-        assertThatThrownBy(() -> service.releaseFunds(DEAL, "host-1")).isInstanceOf(PaymentGatewayException.class);
-
-        verify(repository).updateStatus(a.getId(), "PAYOUT_PENDING");
-        verify(repository, never()).markReleased(anyString(), anyString());
-    }
-
-    @Test
-    void releaseFunds_retry_paysPayoutPending_andSkipsReleased() {
-        Payment pending = row("a", "PAYOUT_PENDING", true);
-        Payment done = row("b", "RELEASED", true);
-        when(repository.findByDealId(DEAL)).thenReturn(List.of(pending, done),
-                List.of(row("a", "RELEASED", true), done));
-        when(gateway.payout(anyString(), any(), anyString())).thenReturn(new com.harnkan.payment.gateway.PayoutResult("p-1"));
-
-        ReleaseOutcome outcome = service.releaseFunds(DEAL, "host-1");
-
-        assertThat(outcome.releasedCount()).isEqualTo(2);
-        verify(gateway, times(1)).payout(anyString(), any(), anyString());
-        verify(gateway, never()).payout(anyString(), any(), eq(done.getId()));
-    }
-
-    @Test
-    void releaseFunds_rejectsBadCreatorId() {
-        assertThatThrownBy(() -> service.releaseFunds(DEAL, "x".repeat(65))).isInstanceOf(IllegalArgumentException.class);
+    void releaseFundsDelegatesToOneAggregatePayout() {
+        Payment p = payment("HELD", "u1");
+        p.setConfirmedReceipt(true);
+        Payment done = payment("RELEASED", "u1");
+        done.setConfirmedReceipt(true);
+        done.setPaymentTransferGatewayRef("tr_deal");
+        when(repository.findByDealId(DEAL)).thenReturn(List.of(p), List.of(done));
+        when(gateway.payoutDeal(eq(DEAL), eq("host-1"), any(), eq(true)))
+                .thenReturn(new com.harnkan.payment.gateway.PayoutResult("tr_deal"));
+        when(repository.markReleased(p.getId(), "tr_deal")).thenReturn(1);
+        assertThat(service.releaseFunds(DEAL, "host-1").releasedCount()).isEqualTo(1);
+        verify(gateway).payoutDeal(eq(DEAL), eq("host-1"), any(), eq(true));
     }
 }
