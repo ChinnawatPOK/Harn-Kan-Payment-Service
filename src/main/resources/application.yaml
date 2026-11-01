@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: payment
   datasource:
@@ -31,6 +33,7 @@ payment:
     test-transfer-enabled: ${STRIPE_TEST_TRANSFER_ENABLED:false}
     secret-key: ${STRIPE_SECRET_KEY:}
     webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+    reconcile-ms: ${STRIPE_RECONCILE_MS:60000}
 
 deal:
   service:

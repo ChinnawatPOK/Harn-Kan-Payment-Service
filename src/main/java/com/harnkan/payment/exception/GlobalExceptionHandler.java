@@ -54,6 +54,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "PAYMENT_BUSY", exception.getMessage());
     }
 
+    @ExceptionHandler(InvalidStripeWebhookException.class)
+    ResponseEntity<ErrorBody> badWebhook(InvalidStripeWebhookException exception) {
+        return error(HttpStatus.BAD_REQUEST, "INVALID_WEBHOOK", exception.getMessage());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<ErrorBody> badInput(IllegalArgumentException exception) {
         return error(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", exception.getMessage());

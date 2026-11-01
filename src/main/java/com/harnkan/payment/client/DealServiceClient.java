@@ -20,9 +20,9 @@ public class DealServiceClient {
     private final boolean enabled;
     private final ManagedChannel channel;
 
-    public DealServiceClient(@Value("${deal.callback.enabled:true}") boolean enabled,
-                             @Value("${deal.service.host:localhost}") String host,
-                             @Value("${deal.service.port:9090}") int port) {
+    public DealServiceClient(@Value("${deal.callback.enabled}") boolean enabled,
+                             @Value("${deal.service.host}") String host,
+                             @Value("${deal.service.port}") int port) {
         this.enabled = enabled;
         this.channel = enabled ? ManagedChannelBuilder.forAddress(host, port).usePlaintext().build() : null;
     }

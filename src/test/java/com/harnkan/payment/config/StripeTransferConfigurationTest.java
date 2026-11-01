@@ -8,6 +8,9 @@ import static org.assertj.core.api.Assertions.*;
 
 class StripeTransferConfigurationTest {
     ApplicationContextRunner runner = new ApplicationContextRunner()
+            // same values application.yaml supplies when the service runs
+            .withPropertyValues("payment.gateway-mode=fake", "payment.stripe.payout-mode=ledger",
+                    "payment.stripe.secret-key=", "payment.stripe.sandbox-host-account-id=")
             .withBean(com.harnkan.payment.service.DealPayoutService.class, () -> org.mockito.Mockito.mock(com.harnkan.payment.service.DealPayoutService.class))
             .withUserConfiguration(PaymentConfiguration.class,StripeTestTransferController.class);
     @Test void testEndpointIsOffByDefaultAndExplicitlyEnabledForSandboxOnly() {

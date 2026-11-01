@@ -17,15 +17,15 @@ public class PaymentConfiguration {
 
     @Bean
     @ConditionalOnProperty(name = "payment.gateway-mode", havingValue = "stripe")
-    StripeClient stripeClient(@Value("${payment.stripe.secret-key:}") String key) {
+    StripeClient stripeClient(@Value("${payment.stripe.secret-key}") String key) {
         if (key.isBlank()) throw new IllegalArgumentException("Stripe mode requires STRIPE_SECRET_KEY");
         return StripeClient.builder().setApiKey(key).setMaxNetworkRetries(1)
                 .setConnectTimeout(5000).setReadTimeout(15000).build();
     }
 
     @Bean
-    PaymentGateway paymentGateway(@Value("${payment.gateway-mode:fake}") String mode,
-            @Value("${payment.stripe.payout-mode:ledger}") String payoutMode,
+    PaymentGateway paymentGateway(@Value("${payment.gateway-mode}") String mode,
+            @Value("${payment.stripe.payout-mode}") String payoutMode,
             ObjectProvider<StripeClient> clients, ObjectProvider<StripeTransferService> transfers) {
         if (!java.util.Set.of("ledger", "sandbox-transfer").contains(payoutMode))
             throw new IllegalArgumentException("STRIPE_PAYOUT_MODE must be ledger or sandbox-transfer");

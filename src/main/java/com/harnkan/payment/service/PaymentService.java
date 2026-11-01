@@ -236,6 +236,17 @@ public class PaymentService {
         handleGatewayResult(gatewayReference, "FAILED", "PAYMENT_FAILED");
     }
 
+    /** Safety net for a missed webhook: asks the gateway what happened to a PAYMENT_PENDING payment. */
+    public void reconcilePayment(String paymentId) {
+        Payment payment = getPayment(paymentId);
+        if (!"PAYMENT_PENDING".equals(payment.getStatus()) || !validReference(payment.getPaymentGatewayRef())) return;
+        switch (gateway.paymentState(payment.getPaymentGatewayRef())) {
+            case SUCCEEDED -> handlePaymentSucceeded(payment.getPaymentGatewayRef());
+            case FAILED -> handlePaymentFailed(payment.getPaymentGatewayRef());
+            default -> { }
+        }
+    }
+
     private void handleGatewayResult(String gatewayReference, String targetStatus, String event) {
         if (!validReference(gatewayReference)) {
             throw new IllegalArgumentException("gatewayReference is required and must not exceed 255 characters");

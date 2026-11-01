@@ -5,7 +5,6 @@ import com.harnkan.payment.service.ReleaseOutcome;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.*;
 
-/** Explicit sandbox test entry point using the same receipt checks and persistence as ReleaseFunds. */
 @RestController
 @RequestMapping("/internal/dev/stripe/transfers")
 @ConditionalOnProperty(name = "payment.stripe.test-transfer-enabled", havingValue = "true")

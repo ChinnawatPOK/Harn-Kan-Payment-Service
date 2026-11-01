@@ -131,8 +131,7 @@ public class PaymentRepository {
     public List<String> paymentsToReconcile() {
         return jdbc().queryForList("""
                 SELECT id FROM payments WHERE payment_gateway_ref IS NOT NULL AND
-                ((status = 'PAYMENT_PENDING' AND updated_at < UTC_TIMESTAMP() - INTERVAL 10 MINUTE)
-                OR status = 'REFUND_PENDING') ORDER BY updated_at LIMIT 100
+                status = 'PAYMENT_PENDING' AND updated_at < UTC_TIMESTAMP() - INTERVAL 10 MINUTE ORDER BY updated_at LIMIT 100
                 """, String.class);
     }
 
