@@ -6,4 +6,7 @@ public interface PaymentGateway {
     StartPaymentResult startPayment(String paymentId, BigDecimal amount);
     RefundResult refund(String paymentGatewayRef, BigDecimal amount);
     PayoutResult payout(String creatorId, BigDecimal amount, String reference);
+    default PayoutResult payout(String creatorId, BigDecimal amount, String reference, String paymentGatewayRef) {
+        return payout(creatorId, amount, reference);
+    }
 }

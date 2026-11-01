@@ -240,7 +240,7 @@ public class PaymentService {
                 }
                 repository.updateStatus(payment.getId(), "PAYOUT_PENDING");
                 try {
-                    PayoutResult result = gateway.payout(creatorId, payment.getAmount(), payment.getId());
+                    PayoutResult result = gateway.payout(creatorId, payment.getAmount(), payment.getId(), payment.getPaymentGatewayRef());
                     if (result == null || !validReference(result.gatewayReference())) {
                         throw new PaymentGatewayException();
                     }

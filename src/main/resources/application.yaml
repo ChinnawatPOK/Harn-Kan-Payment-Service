@@ -17,7 +17,7 @@ spring:
     baseline-version: 0
 
 server:
-  port: ${SERVER_PORT:8082}
+  port: ${SERVER_PORT:8080}
 
 grpc:
   server:
@@ -26,6 +26,9 @@ grpc:
 payment:
   gateway-mode: ${PAYMENT_GATEWAY_MODE:fake}
   stripe:
+    payout-mode: ${STRIPE_PAYOUT_MODE:ledger}
+    sandbox-host-account-id: ${STRIPE_SANDBOX_HOST_ACCOUNT_ID:}
+    test-transfer-enabled: ${STRIPE_TEST_TRANSFER_ENABLED:false}
     secret-key: ${STRIPE_SECRET_KEY:}
     webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
 

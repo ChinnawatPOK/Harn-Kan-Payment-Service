@@ -1,5 +1,8 @@
 # Harn Kan Payment Service
 
+For the restored Stripe Transfer and the sandbox-only REST test endpoint, see [Stripe transfer setup and curl](docs/stripe-transfer.md). Current application/Compose REST port is **8080**.
+
+
 Payment Service implements the [project blueprint](Harn-Kan-Payment-Service-Blueprint.md) in the existing `com.harnkan:payment` Maven project. It owns payment reservations, payment status and deal refunds. It does not own deals, slots, users or notifications.
 
 ## Architecture
