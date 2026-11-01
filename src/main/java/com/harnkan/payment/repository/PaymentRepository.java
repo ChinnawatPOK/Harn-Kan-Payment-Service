@@ -19,7 +19,7 @@ import org.springframework.stereotype.Repository;
 public class PaymentRepository {
     private static final String COLUMNS = """
             id, deal_id, participant_id, amount, payment_gateway_ref, refund_gateway_ref,
-            payout_gateway_ref, status, reserved_until, is_confirmed_receipt, created_at, updated_at
+            payout_gateway_ref, payment_transfer_gateway_ref, status, reserved_until, is_confirmed_receipt, created_at, updated_at
             """;
     private final JdbcTemplate template;
     private final PaymentRowMapper mapper = new PaymentRowMapper();
@@ -29,12 +29,6 @@ public class PaymentRepository {
         this.template = template;
     }
 
-    /**
-     * MySQL session lock serializes mutations for a deal across app instances, including
-     * the initial insert (there is deliberately no unique pair index in this phase).
-     * Reuse the SAME connection for SQL while locked. Statements remain autocommitted:
-     * REFUND_PENDING survives a gateway failure and no DB transaction spans the network.
-     */
     public <T> T withDealLock(String dealId, Supplier<T> action) {
         if (lockedTemplate.get() != null) {
             throw new IllegalStateException("Nested payment locks are not supported");
@@ -71,9 +65,9 @@ public class PaymentRepository {
     }
 
     public void insert(Payment payment) {
-        jdbc().update("INSERT INTO payments (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        jdbc().update("INSERT INTO payments (" + COLUMNS + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 payment.getId(), payment.getDealId(), payment.getParticipantId(), payment.getAmount(),
-                payment.getPaymentGatewayRef(), payment.getRefundGatewayRef(), payment.getPayoutGatewayRef(),
+                payment.getPaymentGatewayRef(), payment.getRefundGatewayRef(), payment.getPayoutGatewayRef(), payment.getPaymentTransferGatewayRef(),
                 payment.getStatus(), payment.getReservedUntil(), payment.getConfirmedReceipt(),
                 payment.getCreatedAt(), payment.getUpdatedAt());
     }
@@ -83,7 +77,7 @@ public class PaymentRepository {
     }
 
     public List<Payment> findByDealId(String dealId) {
-        return jdbc().query("SELECT " + COLUMNS + " FROM payments WHERE deal_id = ? ORDER BY id", mapper, dealId);
+        return jdbc().query("SELECT " + COLUMNS + " FROM payments WHERE deal_id = ? ORDER BY created_at, id", mapper, dealId);
     }
 
     public Optional<Payment> findByGatewayReference(String reference) {
@@ -94,7 +88,7 @@ public class PaymentRepository {
     public boolean existsActivePayment(String dealId, String participantId) {
         Integer count = jdbc().queryForObject("""
                 SELECT COUNT(*) FROM payments WHERE deal_id = ? AND participant_id = ?
-                AND status IN ('RESERVED', 'PAYMENT_PENDING', 'HELD', 'REFUND_PENDING')
+                AND status IN ('RESERVED', 'PAYMENT_PENDING', 'HELD', 'REFUND_PENDING', 'PAYOUT_PENDING', 'RELEASED')
                 """, Integer.class, dealId, participantId);
         return count != null && count > 0;
     }
@@ -110,10 +104,35 @@ public class PaymentRepository {
                 """, gatewayRef, newStatus, LocalDateTime.now(ZoneOffset.UTC), paymentId);
     }
 
+    public int markConfirmedReceipt(String paymentId) {
+        return jdbc().update("""
+                UPDATE payments SET is_confirmed_receipt = TRUE, updated_at = ?
+                WHERE id = ? AND status = 'HELD'
+                """, LocalDateTime.now(ZoneOffset.UTC), paymentId);
+    }
+
+    public int markReleased(String paymentId, String paymentTransferGatewayRef) {
+        return jdbc().update("""
+                UPDATE payments SET payment_transfer_gateway_ref = ?, status = 'RELEASED', updated_at = ?
+                WHERE id = ? AND status = 'PAYOUT_PENDING'
+                AND (payment_transfer_gateway_ref IS NULL OR payment_transfer_gateway_ref = ?)
+                """, paymentTransferGatewayRef, LocalDateTime.now(ZoneOffset.UTC), paymentId, paymentTransferGatewayRef);
+    }
+
     public int markRefunded(String paymentId, String refundGatewayRef) {
         return jdbc().update("""
                 UPDATE payments SET refund_gateway_ref = ?, status = 'REFUNDED', updated_at = ?
                 WHERE id = ? AND status = 'REFUND_PENDING'
                 """, refundGatewayRef, LocalDateTime.now(ZoneOffset.UTC), paymentId);
     }
+    /** Compatibility with the existing deployed receipt handler. */
+    public void confirmReceipt(String paymentId) { markConfirmedReceipt(paymentId); }
+
+    public List<String> paymentsToReconcile() {
+        return jdbc().queryForList("""
+                SELECT id FROM payments WHERE payment_gateway_ref IS NOT NULL AND
+                status = 'PAYMENT_PENDING' AND updated_at < UTC_TIMESTAMP() - INTERVAL 10 MINUTE ORDER BY updated_at LIMIT 100
+                """, String.class);
+    }
+
 }

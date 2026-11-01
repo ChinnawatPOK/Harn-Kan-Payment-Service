@@ -18,7 +18,7 @@ public class GrpcServerLifecycle implements SmartLifecycle {
     private final int port;
     private Server server;
 
-    public GrpcServerLifecycle(PaymentGrpcService paymentService, @Value("${grpc.server.port:9091}") int port) {
+    public GrpcServerLifecycle(PaymentGrpcService paymentService, @Value("${grpc.server.port}") int port) {
         this.paymentService = paymentService;
         this.port = port;
     }

@@ -1,5 +1,6 @@
 package com.harnkan.payment.exception;
 
+import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -11,7 +12,17 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
-    public record ErrorBody(String code, String message) {}
+    public record ErrorBody(String code, String message, String timestamp) {}
+
+    @ExceptionHandler(UnauthorizedException.class)
+    ResponseEntity<ErrorBody> unauthorized(UnauthorizedException exception) {
+        return error(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", exception.getMessage());
+    }
+
+    @ExceptionHandler(PaymentForbiddenException.class)
+    ResponseEntity<ErrorBody> forbidden(PaymentForbiddenException exception) {
+        return error(HttpStatus.FORBIDDEN, "FORBIDDEN", exception.getMessage());
+    }
 
     @ExceptionHandler(PaymentNotFoundException.class)
     ResponseEntity<ErrorBody> notFound(PaymentNotFoundException exception) {
@@ -43,6 +54,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return error(HttpStatus.SERVICE_UNAVAILABLE, "PAYMENT_BUSY", exception.getMessage());
     }
 
+    @ExceptionHandler(InvalidStripeWebhookException.class)
+    ResponseEntity<ErrorBody> badWebhook(InvalidStripeWebhookException exception) {
+        return error(HttpStatus.BAD_REQUEST, "INVALID_WEBHOOK", exception.getMessage());
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<ErrorBody> badInput(IllegalArgumentException exception) {
         return error(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", exception.getMessage());
@@ -56,6 +72,6 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     private ResponseEntity<ErrorBody> error(HttpStatus status, String code, String message) {
-        return ResponseEntity.status(status).body(new ErrorBody(code, message));
+        return ResponseEntity.status(status).body(new ErrorBody(code, message, Instant.now().toString()));
     }
 }

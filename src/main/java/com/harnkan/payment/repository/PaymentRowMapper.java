@@ -18,6 +18,7 @@ public class PaymentRowMapper implements RowMapper<Payment> {
         payment.setPaymentGatewayRef(rs.getString("payment_gateway_ref"));
         payment.setRefundGatewayRef(rs.getString("refund_gateway_ref"));
         payment.setPayoutGatewayRef(rs.getString("payout_gateway_ref"));
+        payment.setPaymentTransferGatewayRef(rs.getString("payment_transfer_gateway_ref"));
         payment.setStatus(rs.getString("status"));
         payment.setReservedUntil(dateTime(rs, "reserved_until"));
         payment.setConfirmedReceipt(rs.getBoolean("is_confirmed_receipt"));

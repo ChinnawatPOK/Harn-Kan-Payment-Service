@@ -1,5 +1,8 @@
 # Harn Kan Payment Service
 
+For the restored Stripe Transfer and the sandbox-only REST test endpoint, see [Stripe transfer setup and curl](docs/stripe-transfer.md). Current application/Compose REST port is **8082**.
+
+
 Payment Service implements the [project blueprint](Harn-Kan-Payment-Service-Blueprint.md) in the existing `com.harnkan:payment` Maven project. It owns payment reservations, payment status and deal refunds. It does not own deals, slots, users or notifications.
 
 ## Architecture
@@ -9,7 +12,7 @@ Deal Service --gRPC--> Payment Service --JdbcTemplate--> MySQL
 Client       --REST--> Payment Service --PaymentGateway--> Fake Gateway
 ```
 
-Payment Service is a **gRPC server only**. There are no outbound Deal Service calls. REST runs on **8080**, gRPC on **9091**, and MySQL on **localhost:3306**, database **harnkan_payment**.
+Payment Service is a **gRPC server only**. There are no outbound Deal Service calls. REST runs on **8082**, gRPC on **9091**, and MySQL on **localhost:3306**, database **harnkan_payment**.
 
 Java 21, Spring Boot 4.0.8, Maven, Spring Web MVC, Spring JDBC, MySQL, protobuf and gRPC are used. There is no JPA/Hibernate. The existing Boot 4 `spring-boot-starter-webmvc` is retained. A Spring-managed gRPC Java server starts and stops with the application; its port property is `grpc.server.port`.
 
@@ -25,7 +28,7 @@ Prerequisites: Java 21 and Docker with Compose (or an existing MySQL 8 database)
    docker compose up --build -d --wait
    ```
 
-   Compose builds the app image, creates `harnkan_payment`, and persists its data in a named volume. REST is available on `localhost:8080`, gRPC on `localhost:9091`, and MySQL on `localhost:3306`. The development MySQL password is `password` in both `docker-compose.yml` and `application.yaml`. If you change it, update both files; changing the Compose value does not change the password in an existing database volume. Use `docker compose logs -f payment-service` to view app logs and `docker compose down` to stop both services without removing database data.
+   Compose builds the app image, creates `harnkan_payment`, and persists its data in a named volume. REST is available on `localhost:8082`, gRPC on `localhost:9091`, and MySQL on `localhost:3306`. The development MySQL password is `password` in both `docker-compose.yml` and `application.yaml`. If you change it, update both files; changing the Compose value does not change the password in an existing database volume. Use `docker compose logs -f payment-service` to view app logs and `docker compose down` to stop both services without removing database data.
 
 To run the app directly on your machine while keeping only MySQL in Docker:
 
@@ -37,7 +40,7 @@ To run the app directly on your machine while keeping only MySQL in Docker:
 
    Windows: use `mvnw.cmd` in place of `./mvnw`. An installed Maven can run the same goals with `mvn`.
 
-   Expected startup messages include `Tomcat started on port 8080` and `Payment gRPC server listening on 9091`. The app fails startup if MySQL cannot be reached or the schema cannot be initialized.
+   Expected startup messages include `Tomcat started on port 8082` and `Payment gRPC server listening on 9091`. The app fails startup if MySQL cannot be reached or the schema cannot be initialized.
 
 To package and run a standalone executable JAR:
 
@@ -58,7 +61,7 @@ Run from the repository directory. Stop a locally run app with Ctrl+C; `docker c
 | `PAYMENT_GATEWAY_MODE` | `fake`; only the fake adapter is implemented in this phase |
 | `STRIPE_SECRET_KEY` | Reserved configuration for the future Stripe adapter |
 | `STRIPE_WEBHOOK_SECRET` | Reserved configuration for the future signed webhook |
-| `SERVER_PORT` | Optional REST port override; default `8080` |
+| `SERVER_PORT` | Optional REST port override; default `8082` |
 | `GRPC_SERVER_PORT` | Optional gRPC port override; default `9091` |
 | `payment.jwt-secret` | REST JWT verification; must match User Service exactly (at least 32 characters) |
 
@@ -114,8 +117,8 @@ Use the payment ID returned by `CreatePayment`:
 
 ```bash
 PAYMENT_ID=replace_with_returned_payment_id
-curl -i "http://localhost:8080/api/payments/$PAYMENT_ID"
-curl -i -X POST "http://localhost:8080/api/payments/$PAYMENT_ID/pay"
+curl -i "http://localhost:8082/api/payments/$PAYMENT_ID"
+curl -i -X POST "http://localhost:8082/api/payments/$PAYMENT_ID/pay"
 ```
 
 Pay response:

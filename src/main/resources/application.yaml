@@ -1,10 +1,12 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: payment
   datasource:
-    url: jdbc:mysql://localhost:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true
-    username: root
-    password: password
+    url: ${DB_URL:jdbc:mysql://localhost:3306/payment?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:password}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
@@ -17,15 +19,25 @@ spring:
     baseline-version: 0
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8082}
 
 grpc:
   server:
-    port: 9091
+    port: ${GRPC_SERVER_PORT:9091}
 
 payment:
   gateway-mode: ${PAYMENT_GATEWAY_MODE:fake}
-  jwt-secret: 9768318c34e318158c87bfb9004a71fbcb9badb1056f74b011d485e27bb4e9a8
   stripe:
+    payout-mode: ${STRIPE_PAYOUT_MODE:ledger}
+    sandbox-host-account-id: ${STRIPE_SANDBOX_HOST_ACCOUNT_ID:}
+    test-transfer-enabled: ${STRIPE_TEST_TRANSFER_ENABLED:false}
     secret-key: ${STRIPE_SECRET_KEY:}
     webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+    reconcile-ms: ${STRIPE_RECONCILE_MS:60000}
+
+deal:
+  service:
+    host: ${DEAL_SERVICE_HOST:localhost}
+    port: ${DEAL_SERVICE_PORT:9090}
+  callback:
+    enabled: ${DEAL_CALLBACK_ENABLED:true}
