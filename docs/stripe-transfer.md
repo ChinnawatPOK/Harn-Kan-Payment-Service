@@ -10,7 +10,7 @@ STRIPE_SECRET_KEY=sk_test_replace_me
 STRIPE_PAYOUT_MODE=sandbox-transfer
 STRIPE_SANDBOX_HOST_ACCOUNT_ID=acct_1UWXRNLoV2Vrct9W
 STRIPE_TEST_TRANSFER_ENABLED=true
-SERVER_PORT=8080
+SERVER_PORT=8082
 ```
 
 Compose reads ignored .env and passes settings to Payment. For a direct Java launch export them into the process. The internal test endpoint is disabled by default, requires explicit sandbox configuration, and requires no JWT on the local/internal service port. Live keys are rejected by the transfer service.
@@ -26,7 +26,7 @@ The aggregate transfer has no source_transaction: one source charge cannot fund 
 ## Test curl
 
 ```bash
-curl -X POST 'http://localhost:8080/internal/dev/stripe/transfers' \
+curl -X POST 'http://localhost:8082/internal/dev/stripe/transfers' \
   -H 'Content-Type: application/json' \
   -d '{
     "dealId": "REPLACE_WITH_DEAL_ID",

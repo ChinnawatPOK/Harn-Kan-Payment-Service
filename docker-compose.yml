@@ -5,9 +5,10 @@ services:
     container_name: harnkan-payment-service
     restart: unless-stopped
     ports:
-      - "8080:8080"   # Payment REST API (the gateway routes /api/payments/** here)
+      - "8082:8082"   # Payment REST API (the gateway routes /api/payments/** here)
       - "9091:9091"   # Payment gRPC: CreatePayment, CancelPayment, RefundDeal
     environment:
+      SERVER_PORT: 8082
       PAYMENT_GATEWAY_MODE: ${PAYMENT_GATEWAY_MODE:-fake}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_PAYOUT_MODE: ${STRIPE_PAYOUT_MODE:-ledger}
